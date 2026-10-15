@@ -1,0 +1,18 @@
+{
+  "version": 1,
+  "description": "Where each side stood at the last accepted sync. A sync agent diffs from these commits rather than comparing whole trees, and updates them in the sync PR itself.",
+  "pairs": {
+    "agent-sdk-js": {
+      "internal": {
+        "repo": "stiggio/stigg-sdk",
+        "lastSyncedCommit": null,
+        "lastSyncedAt": null
+      },
+      "openSource": {
+        "repo": "stiggio/stigg-agent-sdk-ts",
+        "lastSyncedCommit": null,
+        "lastSyncedAt": null
+      }
+    }
+  }
+}
