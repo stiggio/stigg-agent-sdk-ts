@@ -23,7 +23,7 @@
  * So the client here is deliberate rather than un-updated. What changed with OpenRouter is that a
  * first-party client exists there; the vendor hook that let it change is the point, not the swap.
  *
- * Run:  yarn workspace @stigg/agent-sdk-js run example-gateway-litellm
+ * Run:  yarn example-gateway-litellm
  */
 import '../shared/load-env';
 import OpenAI from 'openai';

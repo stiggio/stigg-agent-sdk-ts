@@ -17,9 +17,9 @@
  * streamed LiteLLM call cannot carry its cost at all. To watch real spend billed, run the gateway
  * example, which makes the same request both ways and prints the two numbers side by side:
  *
- *   yarn workspace @stigg/agent-sdk-js run example-gateway-litellm
+ *   yarn example-gateway-litellm
  *
- * Run:  yarn workspace @stigg/agent-sdk-js run example-client-litellm
+ * Run:  yarn example-client-litellm
  */
 import OpenAI from 'openai';
 import { litellmRecipe } from '../../src';

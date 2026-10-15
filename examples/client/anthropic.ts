@@ -5,7 +5,7 @@
  * a turn is streamed exactly as it would be without Stigg - `stigg.wrap()` and `run.start()` in
  * the shared script are the whole integration.
  *
- * Run:  yarn workspace @stigg/agent-sdk-js run example-client-anthropic
+ * Run:  yarn example-client-anthropic
  */
 import Anthropic from '@anthropic-ai/sdk';
 import { startChat } from './core/chat';

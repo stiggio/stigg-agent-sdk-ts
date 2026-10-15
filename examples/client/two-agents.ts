@@ -14,7 +14,7 @@
  *
  * Nothing here is interactive, so it is also the one example a test can run end to end.
  *
- * Run:  yarn workspace @stigg/agent-sdk-js run example-two-agents
+ * Run:  yarn example-two-agents
  */
 import '../shared/load-env';
 import Anthropic from '@anthropic-ai/sdk';

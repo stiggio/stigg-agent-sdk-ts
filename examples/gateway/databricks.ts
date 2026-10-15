@@ -31,13 +31,13 @@
  * client side distinguishes them - so which recipe to name is an assertion about your own
  * workspace, not something the SDK can detect. Both are exercised from this one file:
  *
- *   AGENT_SDK_DATABRICKS_EXTERNAL=1 yarn workspace @stigg/agent-sdk-js run example-gateway-databricks
+ *   AGENT_SDK_DATABRICKS_EXTERNAL=1 yarn example-gateway-databricks
  *
  * That flips the recipe to `databricksExternalRecipe()` and the events to
  * `databricks-external.*`. Everything else is identical, which is the point: the response is the
  * same response, and the vendor name is the only durable record of which route you said it was.
  *
- * Run:  yarn workspace @stigg/agent-sdk-js run example-gateway-databricks
+ * Run:  yarn example-gateway-databricks
  */
 import '../shared/load-env';
 import OpenAI from 'openai';

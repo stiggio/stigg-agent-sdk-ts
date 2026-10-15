@@ -273,7 +273,7 @@ export async function runChat(vendor: ChatVendor): Promise<void> {
         process.stdout.write('\n');
         console.log(`  ${decision.message}`);
         console.log('  Raise the budget in another shell, then just keep typing - the next message re-checks:');
-        console.log('    yarn workspace @stigg/agent-sdk-js run example-setup --agent-limit 6');
+        console.log('    yarn example-setup --agent-limit 6');
       }
       prompting = true;
       rl.prompt();

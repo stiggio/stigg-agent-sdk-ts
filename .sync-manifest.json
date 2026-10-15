@@ -8,7 +8,7 @@
         "repo": "stiggio/stigg-agent-sdk-ts",
         "path": "."
       },
-      "mirror": ["src/**", "test/**", "testing/**", "examples/**", "docs/**", "tsconfig.build.json"],
+      "mirror": ["src/**", "test/**", "testing/**", "docs/**", "tsconfig.build.json"],
       "transform": [
         {
           "path": "package.json",
@@ -33,6 +33,10 @@
         {
           "path": ".env.template",
           "rules": "env-template"
+        },
+        {
+          "path": "examples/**",
+          "rules": "commands"
         }
       ],
       "internalOnly": [".env", "docs/instances.md", "examples/demo.env", "project.json"],
@@ -60,7 +64,8 @@
         "direction": "Inbound (internal -> here) is the mechanised direction and the one these rules are written for. Outbound is done by hand: a contribution accepted here is reviewed and applied into upstream by a maintainer. The transforms are not all symmetric - some are one-way holds, where this side deliberately carries less than the source - so an outbound sync must never be a blind reversal of them. Design the outbound direction when there is a real outbound case; until then, saying it is automatic would be a promise nothing keeps.",
         "heldBack": "docs/instances.md is internal for the moment - a decision about the document, not about the mirror. Restoring it means: drop it from internalOnly, delete the docs-contract filter, and put the Layout line back in the README.",
         "agentSkill": ".claude/skills/ mirrors: it documents how to add a vendor binding to this SDK - provider versus gateway, the invariants every binding owes. .gitignore keeps local agent settings out while tracking it.",
-        "vocabulary": "'upstream' is where the SDK is developed and released from; 'here' is this repository. internalOnly lists paths that exist upstream and deliberately do not appear here."
+        "vocabulary": "'upstream' is where the SDK is developed and released from; 'here' is this repository. internalOnly lists paths that exist upstream and deliberately do not appear here.",
+        "correctionsPendingUpstream": "examples/gateway/cloudflare.ts names `example-gateway-cloudflare` in its Run line. Upstream says `example-client-workers-ai`, which is not a script on either side - a documentation bug the command check here caught. This is a fix to carry back, not a divergence to preserve: when it lands upstream, this note goes."
       },
       "upstream": {
         "describedBy": "the tooling that performs the copy"
@@ -231,7 +236,7 @@
           "why": "Bounded to these script names so the rewrite is reversible."
         }
       ],
-      "appliesTo": ["README.md", ".claude/**/*.md"]
+      "appliesTo": ["README.md", ".claude/**/*.md", "examples/**"]
     },
     "docs-contract": {
       "description": "`docs/instances.md` is held back from this side for now, and the mirrored contract test reads every document in its list with readFileSync - a missing one throws and fails the suite. One line filters the list to the documents that exist.",

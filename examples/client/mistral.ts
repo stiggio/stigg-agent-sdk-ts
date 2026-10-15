@@ -17,7 +17,7 @@
  * method entirely, and a stream read through `getReader()` rather than `for await` bypasses the
  * metered iterator. This example uses the governed paths - the methods, and `for await`.
  *
- * Run:  yarn workspace @stigg/agent-sdk-js run example-client-mistral
+ * Run:  yarn example-client-mistral
  */
 import { Mistral } from '@mistralai/mistralai';
 import { startChat } from './core/chat';

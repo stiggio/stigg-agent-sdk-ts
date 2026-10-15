@@ -31,7 +31,7 @@
  * names it explicitly. That is the same escape hatch any caller has for a Groq deployment behind a
  * proxy or a custom `GROQ_BASE_URL`.
  *
- * Run:  yarn workspace @stigg/agent-sdk-js run example-client-groq
+ * Run:  yarn example-client-groq
  */
 import Groq from 'groq-sdk';
 import { groqRecipe } from '../../src';

@@ -28,7 +28,7 @@ Seventeen are. Everything else is imported by them.
 | `gateway/cloudflare.ts` | `example-gateway-cloudflare` — Cloudflare's own client, and the one example that does not stream: a streamed `ai.run` carries no usage to read |
 | `shared/setup-governance.ts` | `example-setup` — also imported by every example above |
 
-Run them as `yarn workspace @stigg/agent-sdk-js run <script>`.
+Run them as `yarn <script>`.
 
 All of them work with no keys and no Stigg account **except `example-client-typesafe`**: the
 built-in vendor mock speaks the chat wire formats, and TypeSafe's System One is not one of them.

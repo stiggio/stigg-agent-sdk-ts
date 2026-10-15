@@ -15,7 +15,7 @@
  * because a `Chat` holds a private reference to the models module it was built from, so a chat
  * created off a wrapped client would call the original and never be gated. See the README.
  *
- * Run:  yarn workspace @stigg/agent-sdk-js run example-client-gemini
+ * Run:  yarn example-client-gemini
  */
 import { GoogleGenAI } from '@google/genai';
 import { startChat } from './core/chat';

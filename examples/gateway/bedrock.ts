@@ -24,7 +24,7 @@
  * chain whether it can authenticate and runs against the offline mock when it cannot;
  * `AGENT_SDK_OFFLINE=1` forces the mock either way.
  *
- * Run:  yarn workspace @stigg/agent-sdk-js run example-gateway-bedrock
+ * Run:  yarn example-gateway-bedrock
  */
 import '../shared/load-env';
 import { BedrockRuntimeClient, ConverseCommand, ConverseStreamCommand } from '@aws-sdk/client-bedrock-runtime';

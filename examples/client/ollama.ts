@@ -21,7 +21,7 @@
  * newline-delimited JSON and omits the counters from intermediate chunks exactly as the server
  * does.
  *
- * Run:  yarn workspace @stigg/agent-sdk-js run example-client-ollama
+ * Run:  yarn example-client-ollama
  */
 import { Ollama } from 'ollama';
 import { startChat } from './core/chat';

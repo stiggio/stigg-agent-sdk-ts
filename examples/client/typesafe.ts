@@ -14,8 +14,8 @@
  * a benchmark and becomes a wallet: the batched run spends about one document, the split run
  * spends thirteen, and the budget denies it partway through.
  *
- *   yarn workspace @stigg/agent-sdk-js run example-client-typesafe
- *   yarn workspace @stigg/agent-sdk-js run example-client-typesafe --split
+ *   yarn example-client-typesafe
+ *   yarn example-client-typesafe --split
  *
  * A TypeSafe key is required - the built-in vendor mock speaks the chat wire formats, not this
  * one. Stigg still falls back to its own mock, so this runs with no Stigg account.
@@ -272,7 +272,7 @@ async function main(): Promise<void> {
       // for. That is the difference between a budget and an invoice you read afterwards.
       console.log(`\n  ${decision.message}`);
       console.log(`  Denied after ${calls} of ${batches.length} calls. Raise the budget with:`);
-      console.log(`    yarn workspace @stigg/agent-sdk-js run example-setup --agent-limit ${AGENT_BUDGET * 8}`);
+      console.log(`    yarn example-setup --agent-limit ${AGENT_BUDGET * 8}`);
       break;
     }
   }

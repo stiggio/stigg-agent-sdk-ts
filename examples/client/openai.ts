@@ -5,7 +5,7 @@
  * response parsing, not governance. `stigg.wrap()` recognises this client by its own shape
  * (`chat.completions.create`) rather than by anything this file declares.
  *
- * Run:  yarn workspace @stigg/agent-sdk-js run example-client-openai
+ * Run:  yarn example-client-openai
  */
 import OpenAI from 'openai';
 import { consumeStream } from './core/openai-stream';

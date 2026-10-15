@@ -22,7 +22,7 @@
  * as `databricks.query`. It cannot stream, so it is not what a chat REPL wants; the gateway
  * example drives it:
  *
- *   yarn workspace @stigg/agent-sdk-js run example-gateway-databricks
+ *   yarn example-gateway-databricks
  *
  * ## Asserting the external-model route
  *
@@ -30,13 +30,13 @@
  * client side distinguishes them - so which recipe to name is an assertion about your own
  * workspace rather than something the SDK can detect:
  *
- *   AGENT_SDK_DATABRICKS_EXTERNAL=1 yarn workspace @stigg/agent-sdk-js run example-client-databricks
+ *   AGENT_SDK_DATABRICKS_EXTERNAL=1 yarn example-client-databricks
  *
  * That flips the recipe to `databricksExternalRecipe()` and the events to `databricks-external.*`.
  * Everything else is identical, which is the point: the response is the same response, and the
  * vendor name is the only durable record of which route you said it was.
  *
- * Run:  yarn workspace @stigg/agent-sdk-js run example-client-databricks
+ * Run:  yarn example-client-databricks
  */
 import OpenAI from 'openai';
 import { databricksExternalRecipe, databricksRecipe } from '../../src';

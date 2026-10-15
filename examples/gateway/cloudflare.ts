@@ -31,7 +31,7 @@
  * the built-in offline mock the host is `127.0.0.1`, so the guard rightly declines and the example
  * names it explicitly - the same escape hatch any caller has for a non-public endpoint.
  *
- * Run:  yarn workspace @stigg/agent-sdk-js run example-client-workers-ai
+ * Run:  yarn example-gateway-cloudflare
  */
 import '../shared/load-env';
 import Cloudflare from 'cloudflare';

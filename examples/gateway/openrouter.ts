@@ -20,7 +20,7 @@
  *     them back under the wire's names before anything meters them, so one call reports one set of
  *     metric names whichever client made it. See `sdk-usage.ts` for why that is not cosmetic.
  *
- * Run:  yarn workspace @stigg/agent-sdk-js run example-gateway-openrouter
+ * Run:  yarn example-gateway-openrouter
  */
 import '../shared/load-env';
 import OpenAI from 'openai';

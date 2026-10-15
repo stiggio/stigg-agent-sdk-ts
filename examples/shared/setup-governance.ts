@@ -6,7 +6,7 @@
  * actually has governance. An account without it still gets a working demo - it just enforces at
  * the customer level, with no per-agent chain.
  *
- * Run:  yarn workspace @stigg/agent-sdk-js run example-setup [--agent-limit 3] [--no-governance]
+ * Run:  yarn example-setup [--agent-limit 3] [--no-governance]
  */
 import './load-env';
 import Stigg from '@stigg/typescript';

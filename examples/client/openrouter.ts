@@ -16,7 +16,7 @@
  * `weightedMetrics(openrouterRecipe(), 'credits', { cost: 1 })` - and the gateway example does
  * exactly that, rather than mixing a second denomination into this one.
  *
- * Run:  yarn workspace @stigg/agent-sdk-js run example-client-openrouter
+ * Run:  yarn example-client-openrouter
  */
 import OpenAI from 'openai';
 import { consumeStream } from './core/openai-stream';
