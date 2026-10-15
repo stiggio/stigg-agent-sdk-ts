@@ -1,0 +1,26 @@
+// The merge of the internal package's `tsconfig.json` with the monorepo's `tsconfig.base.json` it
+// extends: the same effective options, with nothing left to extend and the workspace `paths` block
+// dropped - dependencies are ordinary node_modules here. `tools/**` is this repository's own
+// addition. See .sync-manifest.json; a change to the internal base has to be re-merged here.
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022"],
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "types": ["node"],
+    "strict": true,
+    "noEmit": true,
+    "declaration": false,
+    "declarationMap": false,
+    "sourceMap": false,
+    "noImplicitReturns": true,
+    "noFallthroughCasesInSwitch": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "resolveJsonModule": true
+  },
+  "include": ["src/**/*", "examples/**/*", "test/**/*", "testing/**/*", "tools/**/*"],
+  "exclude": ["node_modules", "dist"]
+}
