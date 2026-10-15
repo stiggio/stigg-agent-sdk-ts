@@ -32,5 +32,6 @@ Thumbs.db
 *.swp
 *.swo
 
-# Local agent settings
-.claude/
+# Local agent settings; `.claude/skills/` ships with the SDK and is tracked
+.claude/*
+!.claude/skills/

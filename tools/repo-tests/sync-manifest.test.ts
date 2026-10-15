@@ -1,9 +1,9 @@
 /**
- * The mirror is only as good as the manifest that describes it.
+ * Every tracked file is accounted for.
  *
- * Every tracked file inside a mirrored package has to be accounted for: mirrored, transformed, or
- * explicitly open-source-only. A file that matches none of those is a file nobody decided about -
- * it would travel, or fail to travel, by accident. That is what this test refuses.
+ * `.sync-manifest.json` classifies each path: copied from upstream, rewritten on the way in, or
+ * belonging to this repository alone. A file matching none of those is one nobody decided about -
+ * it would arrive, or fail to arrive, by accident. That is what this test refuses.
  */
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
@@ -12,7 +12,6 @@ import { matchesAny, readJson, trackedFiles } from './shared';
 
 type Pair = {
   id: string;
-  internal: { repo: string; path: string };
   openSource: { repo: string; path: string };
   mirror: string[];
   transform: { path: string; rules: string }[];
@@ -37,12 +36,11 @@ describe('sync manifest', () => {
 
   for (const pair of manifest.pairs) {
     describe(pair.id, () => {
-      it('should name both sides as a single prefix, without a trailing slash', () => {
-        for (const side of [pair.internal, pair.openSource]) {
-          assert.match(side.repo, /^[\w-]+\/[\w-]+$/);
-          assert.ok(side.path.length > 0, 'a path is required; the repository root is "."');
-          assert.ok(!side.path.endsWith('/'), `${side.path} must not end with "/"`);
-        }
+      it('should name this repository as a single prefix, without a trailing slash', () => {
+        const side = pair.openSource;
+        assert.match(side.repo, /^[\w-]+\/[\w-]+$/);
+        assert.ok(side.path.length > 0, 'a path is required; the repository root is "."');
+        assert.ok(!side.path.endsWith('/'), `${side.path} must not end with "/"`);
       });
 
       it('should name a known transform for every transformed file', () => {
@@ -72,7 +70,7 @@ describe('sync manifest', () => {
         assert.deepEqual(
           unaccounted,
           [],
-          `these files are tracked here but no rule says whether they mirror - add them to .sync-manifest.json`,
+          `these files are tracked here but no rule says where they belong - add them to .sync-manifest.json`,
         );
       });
     });

@@ -1,7 +1,6 @@
-// Kept aligned with `eslint.config.mjs` in the internal monorepo (stiggio/stigg-sdk): the same
-// source is linted on both sides, so a rule that exists here and not there turns every sync into a
-// lint failure somebody has to "fix" in mirrored code. Repository-only rules are allowed, as long
-// as they apply to paths that are not mirrored - see `.sync-manifest.json`.
+// Shared with the upstream project: the same source is linted on both sides, so a rule that exists
+// here and not there turns into a lint failure somebody has to "fix" in code they did not write.
+// Rules that apply only to this repository's own files are fine.
 import eslint from '@eslint/js';
 import tseslint from 'typescript-eslint';
 import prettierPlugin from 'eslint-plugin-prettier/recommended';

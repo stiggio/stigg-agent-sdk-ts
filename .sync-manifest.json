@@ -1,18 +1,14 @@
 {
   "version": 1,
-  "description": "The mirror contract. This repository is one half of a mirror; the other is packages/agent-sdk/agent-sdk-js in stiggio/stigg-sdk, where the SDK is developed. A mirrored file has the same path on both sides modulo one directory prefix - here the prefix is empty, because the package is the repository - which is what keeps a sync a reviewable diff rather than a translation. Read by the sync agent, enforced by tools/repo-tests.",
+  "description": "What this repository holds, and what is rewritten on the way in. The SDK is developed upstream at Stigg and copied here file for file; a copied file keeps its path, which is what makes an update a reviewable diff rather than a translation. Read by the tooling that performs the copy, and enforced by tools/repo-tests.",
   "pairs": [
     {
       "id": "agent-sdk-js",
-      "internal": {
-        "repo": "stiggio/stigg-sdk",
-        "path": "packages/agent-sdk/agent-sdk-js"
-      },
       "openSource": {
         "repo": "stiggio/stigg-agent-sdk-ts",
         "path": "."
       },
-      "mirror": ["src/**", "test/**", "testing/**", "examples/**", "docs/**", ".env.template", "tsconfig.build.json"],
+      "mirror": ["src/**", "test/**", "testing/**", "examples/**", "docs/**", "tsconfig.build.json"],
       "transform": [
         {
           "path": "package.json",
@@ -25,18 +21,30 @@
         {
           "path": "README.md",
           "rules": "readme"
+        },
+        {
+          "path": ".claude/**",
+          "rules": "commands"
+        },
+        {
+          "path": "test/docs-contract.test.ts",
+          "rules": "docs-contract"
+        },
+        {
+          "path": ".env.template",
+          "rules": "env-template"
         }
       ],
-      "internalOnly": ["project.json", ".env", "examples/demo.env"],
+      "internalOnly": [".env", "docs/instances.md", "examples/demo.env", "project.json"],
       "notes": {
-        "prefix": "packages/agent-sdk/agent-sdk-js/** on the internal side, ** here.",
+        "prefix": "a package directory inside a larger repository/** on the upstream side, ** here.",
         "sync": [
           "Fetch the source repository and read its default branch - git fetch && git rev-parse origin/main. A local checkout is routinely behind, and syncing from a stale HEAD silently ships an old tree.",
           "Find the last synced source commit from the history, not from a file: git log --grep='^Stigg-Sync-Source:' -1 --format='%(trailers:key=Stigg-Sync-Source,valueonly)'.",
           "git diff <that commit>..<the fetched head> -- <source path> is the whole change set.",
           "Apply it under the destination prefix, then apply the transforms below.",
           "Run: yarn lint && yarn typecheck && yarn test && yarn build.",
-          "Every commit carries the trailer Stigg-Sync-Source: <repo>@<sha>. It is the only record of where a sync came from, so it is not optional."
+          "Every commit carries the trailer Stigg-Sync-Source: <sha> - the upstream commit it was taken from, bare, because the repository it names is not this one's business. It is the only record of where an update came from, so it is not optional."
         ],
         "neverInASync": [
           "A change to a path listed in internalOnly or repositoryOnly.",
@@ -44,12 +52,18 @@
           "A tracked path no rule here accounts for - the guard fails so the decision gets made.",
           "Formatting-only churn: it means the formatter configurations have drifted. Fix that first."
         ],
-        "dependencyUpdates": "They happen internally, where the SDK is developed, and arrive by sync. Nothing here proposes bumps of its own: two bots editing one mirrored manifest from opposite ends is a conflict with a schedule attached.",
+        "dependencyUpdates": "They happen upstream, where the SDK is developed, and arrive by sync. Nothing here proposes bumps of its own: two bots editing one mirrored manifest from opposite ends is a conflict with a schedule attached.",
         "secrets": ".env and examples/demo.env are gitignored on both sides, so a sync that copies tracked files cannot carry one. tools/repo-tests/no-secrets.test.ts is the guard for the day one is committed anyway.",
         "layout": "The package is the repository root (openSource.path \".\"), because one duck-typed package serves every vendor - the recipes under src/bindings carry no vendor dependency, so there is nothing a package-per-adapter split would separate. If that ever changes, the move is: git mv the mirrored paths under packages/<name>/, set openSource.path to it, and split package.json into a workspace root and the package. The guards read this field rather than assuming a layout, so they do not change with it.",
-        "changelog": "CHANGELOG.md is this repository's own: the internal monorepo generates none (nx release has projectChangelogs and workspaceChangelog both false), and nothing is published from here. Each sync appends what arrived and the upstream commit it came from.",
+        "changelog": "CHANGELOG.md is this repository's own: upstream generates none (nx release has projectChangelogs and workspaceChangelog both false), and nothing is published from here. Each sync appends what arrived and the upstream commit it came from.",
         "whyNoStateFile": "There is deliberately no .sync-state.json. A file recording this side's own last-synced commit would have to contain the SHA of the commit that writes it, and a squash merge rewrites that SHA anyway. The Stigg-Sync-Source trailer holds the same information in a place git can answer questions about, and cannot drift from the commit it describes.",
-        "direction": "Inbound (internal -> here) is the mechanised direction and the one these rules are written for. Outbound is done by hand: a contribution accepted here is reviewed and applied into the monorepo by a maintainer. The transforms are not all symmetric - some are one-way holds, where this side deliberately carries less than the source - so an outbound sync must never be a blind reversal of them. Design the outbound direction when there is a real outbound case; until then, saying it is automatic would be a promise nothing keeps."
+        "direction": "Inbound (internal -> here) is the mechanised direction and the one these rules are written for. Outbound is done by hand: a contribution accepted here is reviewed and applied into upstream by a maintainer. The transforms are not all symmetric - some are one-way holds, where this side deliberately carries less than the source - so an outbound sync must never be a blind reversal of them. Design the outbound direction when there is a real outbound case; until then, saying it is automatic would be a promise nothing keeps.",
+        "heldBack": "docs/instances.md is internal for the moment - a decision about the document, not about the mirror. Restoring it means: drop it from internalOnly, delete the docs-contract filter, and put the Layout line back in the README.",
+        "agentSkill": ".claude/skills/ mirrors: it documents how to add a vendor binding to this SDK - provider versus gateway, the invariants every binding owes. .gitignore keeps local agent settings out while tracking it.",
+        "vocabulary": "'upstream' is where the SDK is developed and released from; 'here' is this repository. internalOnly lists paths that exist upstream and deliberately do not appear here."
+      },
+      "upstream": {
+        "describedBy": "the tooling that performs the copy"
       }
     }
   ],
@@ -77,35 +91,35 @@
       "fields": [
         {
           "pointer": "dependencies.@stigg/node-server-sdk",
-          "internal": "workspace:*",
+          "upstream": "workspace:*",
           "openSource": "^6.1.0",
           "why": "The monorepo builds it from source; here it is an ordinary published dependency."
         },
         {
           "pointer": "repository.url",
-          "internal": "https://github.com/stiggio/stigg-sdk.git",
+          "upstream": "the upstream repository",
           "openSource": "git+https://github.com/stiggio/stigg-agent-sdk-ts.git"
         },
         {
           "pointer": "repository.directory",
-          "internal": "packages/agent-sdk/agent-sdk-js",
+          "upstream": "a package directory inside a larger repository",
           "openSource": null,
           "why": "The package is the repository root here, so there is no subdirectory to name."
         },
         {
           "pointer": "scripts.build",
-          "internal": "rm -rf dist && yarn run -T tsc -p tsconfig.json --noEmit && yarn run -T tsc -p tsconfig.build.json",
+          "upstream": "rm -rf dist && yarn run -T tsc -p tsconfig.json --noEmit && yarn run -T tsc -p tsconfig.build.json",
           "openSource": "rimraf dist && tsc -p tsconfig.json --noEmit && tsc -p tsconfig.build.json",
-          "why": "`yarn run -T` is the monorepo's top-level runner; there is no workspace above this one."
+          "why": "`yarn run -T` is upstream's top-level runner; there is no workspace above this one."
         },
         {
           "pointer": "scripts.lint",
-          "internal": "yarn run -T eslint \"{src,examples,test,testing}/**/*.ts\"",
+          "upstream": "yarn run -T eslint \"{src,examples,test,testing}/**/*.ts\"",
           "openSource": "eslint . --max-warnings 0"
         },
         {
           "pointer": "scripts.test",
-          "internal": "tsx --test test/*.test.ts",
+          "upstream": "tsx --test test/*.test.ts",
           "openSource": "yarn test:repo && tsx --test test/*.test.ts",
           "why": "The repository guards run alongside the package's own suite here."
         }
@@ -129,26 +143,26 @@
         "devDependencies.typescript-eslint"
       ],
       "internalOnly": ["nx", "files", "publishConfig"],
-      "why": "`private: true` and the absence of `files`/`publishConfig` are deliberate: nothing is released from this repository, and `@stigg/agent-sdk-js` on npm keeps coming from the monorepo. `main` and `typings` point at `src` on both sides, so they are not transformed."
+      "why": "`private: true` and the absence of `files`/`publishConfig` are deliberate: nothing is released from this repository, and `@stigg/agent-sdk-js` on npm keeps coming from upstream. `main` and `typings` point at `src` on both sides, so they are not transformed."
     },
     "tsconfig": {
-      "description": "The open-source file is the internal `tsconfig.json` merged with the `tsconfig.base.json` it extends: same effective options, nothing left to extend.",
+      "description": "The open-source file is the upstream `tsconfig.json` merged with the `tsconfig.base.json` it extends: same effective options, nothing left to extend.",
       "fields": [
         {
           "pointer": "extends",
-          "internal": "../../../tsconfig.base.json",
+          "upstream": "../../../tsconfig.base.json",
           "openSource": null,
-          "why": "Inlined. A change to the internal base has to be re-merged into this file by hand - there is no other link between them."
+          "why": "Inlined. A change to the upstream base has to be re-merged into this file by hand - there is no other link between them."
         },
         {
           "pointer": "compilerOptions.paths",
-          "internal": "<7 entries pointing at sibling packages' dist/*.d.ts>",
+          "upstream": "<7 entries pointing at sibling packages' dist/*.d.ts>",
           "openSource": null,
           "why": "Dependencies are ordinary node_modules here; there is nothing to redirect."
         },
         {
           "pointer": "include",
-          "internal": ["src/**/*", "examples/**/*", "test/**/*", "testing/**/*"],
+          "upstream": ["src/**/*", "examples/**/*", "test/**/*", "testing/**/*"],
           "openSource": ["src/**/*", "examples/**/*", "test/**/*", "testing/**/*", "tools/**/*"],
           "why": "`tools/` is this repository's own, and is linted and type-checked with everything else."
         }
@@ -158,46 +172,86 @@
       "description": "The package README is this repository's front page. The prose is mirrored; what differs is how a reader is told to run things, because there is no workspace to address.",
       "fields": [
         {
-          "pointer": "<command lines>",
-          "internal": "yarn workspace @stigg/agent-sdk-js run <script>",
-          "openSource": "yarn <script>",
-          "scripts": [
-            "build",
-            "lint",
-            "test",
-            "example-setup",
-            "example-client",
-            "example-client-anthropic",
-            "example-client-openai",
-            "example-client-gemini",
-            "example-client-openrouter",
-            "example-client-litellm",
-            "example-client-typesafe",
-            "example-two-agents",
-            "example-gateway",
-            "example-gateway-openrouter",
-            "example-gateway-litellm",
-            "example-gateway-bedrock"
-          ],
-          "why": "Mechanical, and bounded to these script names so the rewrite is reversible."
-        },
-        {
           "pointer": "<lead paragraph>",
-          "internal": "Says the examples live beside the source in the Stigg SDK monorepo, with paths relative to it.",
+          "upstream": "Says the examples live beside the source in the Stigg SDK monorepo, with paths relative to it.",
           "openSource": "Says the examples live in this repository, with paths relative to its root.",
           "why": "Maintained by hand on each side; a sync reviews it rather than rewriting it."
         },
         {
           "pointer": "<section 7, on how `build` resolves dependencies>",
-          "internal": "Describes resolving workspace siblings through `paths`, built first by Nx.",
+          "upstream": "Describes resolving workspace siblings through `paths`, built first by Nx.",
           "openSource": "Describes ordinary node_modules resolution.",
           "why": "Same: two sentences that are true on one side only."
         },
         {
           "pointer": "<trailing sections>",
-          "internal": null,
-          "openSource": "The framing this repository adds: that it is a mirror, that it publishes nothing, and the licence.",
+          "upstream": null,
+          "openSource": "A short Contributing / Security / License section, which a repository front page needs.",
           "why": "A repository front page needs them; a package README inside a monorepo does not."
+        },
+        {
+          "pointer": "<section 9, Layout>",
+          "upstream": "lists `docs/ instances.md`",
+          "openSource": "the line is removed, because the document is not here",
+          "why": "Held back with the document; restore both together."
+        }
+      ]
+    },
+    "commands": {
+      "description": "The one mechanical rewrite: there is no workspace to address on this side.",
+      "fields": [
+        {
+          "pointer": "<command lines>",
+          "upstream": "yarn workspace @stigg/agent-sdk-js run <script>",
+          "openSource": "yarn <script>",
+          "scripts": [
+            "build",
+            "lint",
+            "test",
+            "example-client",
+            "example-client-anthropic",
+            "example-client-databricks",
+            "example-client-gemini",
+            "example-client-groq",
+            "example-client-litellm",
+            "example-client-mistral",
+            "example-client-ollama",
+            "example-client-openai",
+            "example-client-openrouter",
+            "example-client-typesafe",
+            "example-gateway",
+            "example-gateway-bedrock",
+            "example-gateway-cloudflare",
+            "example-gateway-databricks",
+            "example-gateway-litellm",
+            "example-gateway-openrouter",
+            "example-setup",
+            "example-two-agents"
+          ],
+          "why": "Bounded to these script names so the rewrite is reversible."
+        }
+      ],
+      "appliesTo": ["README.md", ".claude/**/*.md"]
+    },
+    "docs-contract": {
+      "description": "`docs/instances.md` is held back from this side for now, and the mirrored contract test reads every document in its list with readFileSync - a missing one throws and fails the suite. One line filters the list to the documents that exist.",
+      "fields": [
+        {
+          "pointer": "const docs = [...]",
+          "upstream": "['README.md', join('docs','instances.md'), join('examples','README.md')]",
+          "openSource": "the same list, .filter((doc) => existsSync(join(ROOT, doc)))",
+          "why": "A transform rather than drift: written down, reversed by deleting the filter, and a no-op the day docs/instances.md crosses. The better permanent fix is upstream - make the list tolerant there and this transform disappears."
+        }
+      ]
+    },
+    "env-template": {
+      "description": "Keys only on this side: every `NAME=value` becomes `NAME=`. Comments and structure mirror unchanged.",
+      "fields": [
+        {
+          "pointer": "<assignments>",
+          "upstream": "NAME=value for the non-secret defaults - model names, base URLs, the Bedrock region",
+          "openSource": "NAME= for every key",
+          "why": "A template that ships defaults invites someone to keep them; a bare key asks the reader to decide. The defaults stay documented in the README's variable table, and the examples compile their own fallbacks, so nothing here is load-bearing."
         }
       ]
     }

@@ -1,3 +1,10 @@
 yarn.lock
 .yarn/
 dist/
+
+# The SDK's own markdown. Upstream formats only `*.ts` - through `eslint --fix` with the prettier
+# plugin - so this prose has never been Prettier-formatted, and formatting it here would rewrite
+# 1,300 lines of README for no reason. The markdown this repository owns is formatted as usual.
+README.md
+examples/**/*.md
+.claude/

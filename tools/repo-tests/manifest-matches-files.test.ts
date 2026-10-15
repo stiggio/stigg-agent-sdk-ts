@@ -1,9 +1,9 @@
 /**
  * The manifest describes the files, and is held to it.
  *
- * `.sync-manifest.json` says what each transformed field becomes on this side. Nothing made that
+ * `.sync-manifest.json` says what each rewritten field becomes here. Nothing made that
  * true: the manifest could claim `scripts.lint` is one thing while `package.json` says another, and
- * a sync agent reading the manifest would faithfully reproduce the claim rather than the fact.
+ * the tooling reading the manifest would faithfully reproduce the claim rather than the fact.
  *
  * So every concrete field is resolved against the real file. Pointers written as `<prose>` are
  * regions a person maintains, not values a machine can check, and are skipped by name.
@@ -27,7 +27,7 @@ const pair = manifest.pairs[0]!;
 const dir = pair.openSource.path === '.' ? '' : pair.openSource.path;
 const at = (file: string) => (dir ? `${dir}/${file}` : file);
 
-/** The mirrored source only exists after the first sync; before it, the manifest describes a future. */
+/** The SDK source only exists once copied in; before that, the manifest describes a future. */
 const synced = existsSync(join(ROOT, at('src')));
 
 /** tsconfig.json is JSONC - the comments are load-bearing documentation, so strip rather than ban them. */

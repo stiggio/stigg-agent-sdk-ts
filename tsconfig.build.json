@@ -1,0 +1,14 @@
+// Emit for publishing. `tsconfig.json` is the type-checker's view - it covers examples, tests and
+// the harness and deliberately emits nothing; this one compiles the entry points and whatever
+// they import, so only `src/` reaches `dist/`.
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": false,
+    "declaration": true,
+    "outDir": "./dist",
+    "rootDir": "./src"
+  },
+  "files": ["src/index.ts", "src/internal.ts"],
+  "include": []
+}
