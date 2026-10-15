@@ -13,13 +13,17 @@ see how the thing actually works.
 
 ## Running it
 
-Node.js 22 or later, with [Corepack](https://nodejs.org/api/corepack.html).
+Node.js 22 or later.
 
 ```sh
-corepack enable
+corepack enable          # Node 25 and later: npm install -g corepack first
 yarn install
 yarn test
 ```
+
+[Corepack](https://github.com/nodejs/corepack) is what pins Yarn to the version in
+`packageManager`, so everyone resolves the same lockfile. It shipped with Node from 14.19 and was
+unbundled in Node 25, which is why newer versions need the extra line.
 
 | Command                             | What it does                                            |
 | ----------------------------------- | ------------------------------------------------------- |
@@ -37,9 +41,11 @@ vendor and the Stigg API. The SDK's README covers them in detail.
 
 - **It does not publish.** `@stigg/agent-sdk-js` on npm is built and released by Stigg internally;
   the manifest here is `private` and a guard keeps it that way.
-- **It is not where the SDK is developed.** Changes are made internally and mirrored here. The
-  mirror runs both ways, so a pull request against this repository can travel back inward -
-  [`.sync-manifest.json`](.sync-manifest.json) is the contract for what crosses and how.
+- **It is not where the SDK is developed.** Changes are made internally and mirrored here by an
+  agent working from [`.sync-manifest.json`](.sync-manifest.json), which is the contract for what
+  crosses and how. The return journey is manual for now: a pull request accepted here is reviewed
+  and then applied inward by a maintainer, so a fix made here does reach the published package -
+  it is just not a button yet.
 
 ## Layout
 
@@ -48,7 +54,6 @@ src/ test/ testing/ examples/   the SDK - mirrored with the internal repository
 docs/instances.md               what exists at runtime - mirrored
 tools/repo-tests/               guards that keep the mirror honest, run by `yarn test`
 .sync-manifest.json             the mirror contract: what crosses, which way, and how
-.sync-state.json                where each side stood at the last accepted sync
 ```
 
 ## License

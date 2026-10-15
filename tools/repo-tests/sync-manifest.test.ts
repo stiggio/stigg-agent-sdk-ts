@@ -27,16 +27,7 @@ type Manifest = {
   transforms: Record<string, unknown>;
 };
 
-type State = {
-  version: number;
-  pairs: Record<
-    string,
-    { internal: { lastSyncedCommit: string | null }; openSource: { lastSyncedCommit: string | null } }
-  >;
-};
-
 const manifest = readJson<Manifest>('.sync-manifest.json');
-const state = readJson<State>('.sync-state.json');
 
 describe('sync manifest', () => {
   it('should declare at least one pair, at version 1', () => {
@@ -84,21 +75,6 @@ describe('sync manifest', () => {
           `these files are tracked here but no rule says whether they mirror - add them to .sync-manifest.json`,
         );
       });
-
-      it('should have an entry in the sync state', () => {
-        const entry = state.pairs[pair.id];
-        assert.ok(entry, `.sync-state.json has no entry for pair "${pair.id}"`);
-        assert.ok('lastSyncedCommit' in entry.internal);
-        assert.ok('lastSyncedCommit' in entry.openSource);
-      });
     });
   }
-
-  it('should not carry sync state for a pair the manifest dropped', () => {
-    const ids = new Set(manifest.pairs.map((pair) => pair.id));
-    assert.deepEqual(
-      Object.keys(state.pairs).filter((id) => !ids.has(id)),
-      [],
-    );
-  });
 });

@@ -31,12 +31,12 @@
       "notes": {
         "prefix": "packages/agent-sdk/agent-sdk-js/** on the internal side, ** here.",
         "sync": [
-          "Read this pair's lastSyncedCommit for the source side from .sync-state.json.",
-          "git diff <lastSyncedCommit>..HEAD -- <source path> is the whole change set.",
+          "Fetch the source repository and read its default branch - git fetch && git rev-parse origin/main. A local checkout is routinely behind, and syncing from a stale HEAD silently ships an old tree.",
+          "Find the last synced source commit from the history, not from a file: git log --grep='^Stigg-Sync-Source:' -1 --format='%(trailers:key=Stigg-Sync-Source,valueonly)'.",
+          "git diff <that commit>..<the fetched head> -- <source path> is the whole change set.",
           "Apply it under the destination prefix, then apply the transforms below.",
           "Run: yarn lint && yarn typecheck && yarn test && yarn build.",
-          "Update .sync-state.json for both sides in the same pull request.",
-          "Every commit carries the trailer Stigg-Sync-Source: <repo>@<sha>."
+          "Every commit carries the trailer Stigg-Sync-Source: <repo>@<sha>. It is the only record of where a sync came from, so it is not optional."
         ],
         "neverInASync": [
           "A change to a path listed in internalOnly or repositoryOnly.",
@@ -47,7 +47,9 @@
         "dependencyUpdates": "They happen internally, where the SDK is developed, and arrive by sync. Nothing here proposes bumps of its own: two bots editing one mirrored manifest from opposite ends is a conflict with a schedule attached.",
         "secrets": ".env and examples/demo.env are gitignored on both sides, so a sync that copies tracked files cannot carry one. tools/repo-tests/no-secrets.test.ts is the guard for the day one is committed anyway.",
         "layout": "The package is the repository root (openSource.path \".\"), because one duck-typed package serves every vendor - the recipes under src/bindings carry no vendor dependency, so there is nothing a package-per-adapter split would separate. If that ever changes, the move is: git mv the mirrored paths under packages/<name>/, set openSource.path to it, and split package.json into a workspace root and the package. The guards read this field rather than assuming a layout, so they do not change with it.",
-        "changelog": "CHANGELOG.md is this repository's own: the internal monorepo generates none (nx release has projectChangelogs and workspaceChangelog both false), and nothing is published from here. Each sync appends what arrived and the upstream commit it came from."
+        "changelog": "CHANGELOG.md is this repository's own: the internal monorepo generates none (nx release has projectChangelogs and workspaceChangelog both false), and nothing is published from here. Each sync appends what arrived and the upstream commit it came from.",
+        "whyNoStateFile": "There is deliberately no .sync-state.json. A file recording this side's own last-synced commit would have to contain the SHA of the commit that writes it, and a squash merge rewrites that SHA anyway. The Stigg-Sync-Source trailer holds the same information in a place git can answer questions about, and cannot drift from the commit it describes.",
+        "direction": "Inbound (internal -> here) is the mechanised direction and the one these rules are written for. Outbound is done by hand: a contribution accepted here is reviewed and applied into the monorepo by a maintainer. The transforms are not all symmetric - some are one-way holds, where this side deliberately carries less than the source - so an outbound sync must never be a blind reversal of them. Design the outbound direction when there is a real outbound case; until then, saying it is automatic would be a promise nothing keeps."
       }
     }
   ],
@@ -59,7 +61,6 @@
     ".prettierignore",
     ".prettierrc",
     ".sync-manifest.json",
-    ".sync-state.json",
     ".yarn/**",
     ".yarnrc.yml",
     "CHANGELOG.md",
@@ -100,7 +101,7 @@
         {
           "pointer": "scripts.lint",
           "internal": "yarn run -T eslint \"{src,examples,test,testing}/**/*.ts\"",
-          "openSource": "eslint ."
+          "openSource": "eslint . --max-warnings 0"
         },
         {
           "pointer": "scripts.test",

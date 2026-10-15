@@ -8,21 +8,26 @@ repository is not shaped like most.
 The SDK is developed in Stigg's internal monorepo and mirrored here, file for file. That has two
 consequences for a pull request:
 
-- **It still travels.** A change accepted here is mirrored back inward by the same machinery that
-  brought the code out, so a fix made in this repository reaches the published package.
+- **It still travels - by hand, for now.** Changes are carried _outward_ from the internal
+  repository by an agent working from `.sync-manifest.json`. Nothing yet carries a change the other
+  way: a pull request accepted here is reviewed, then applied inward by a maintainer. The fix does
+  reach the published package; it is not a button yet.
 - **Everything under the mirror has rules.** `.sync-manifest.json` says which paths mirror, which
   three files are transformed on the way across, and which belong to this repository alone. A pull
   request that ignores it fails CI rather than surprising someone later.
 
 ## Running it
 
-Node.js 22 or later, with [Corepack](https://nodejs.org/api/corepack.html).
+Node.js 22 or later.
 
 ```sh
-corepack enable
+corepack enable          # Node 25 and later: npm install -g corepack first
 yarn install
 yarn test
 ```
+
+[Corepack](https://github.com/nodejs/corepack) pins Yarn to the version in `packageManager`. It
+shipped with Node from 14.19 and was unbundled in Node 25, so on newer versions install it first.
 
 `yarn lint`, `yarn format` and `yarn typecheck` do what they say, and CI runs exactly those plus
 `yarn test`, so a green local run is a green pull request. `yarn build` needs the SDK source - its

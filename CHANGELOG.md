@@ -14,8 +14,8 @@ changed.
 - The repository itself: Yarn 4 through Corepack, ESLint and Prettier in the configuration the SDK
   is written against, a single CI job, and the guards in `tools/repo-tests` that keep the mirror
   honest.
-- `.sync-manifest.json` and `.sync-state.json` - the contract for what crosses between this
-  repository and the one the SDK is developed in, and where each side stood at the last sync.
+- `.sync-manifest.json` - the contract for what crosses between this repository and the one the
+  SDK is developed in. Where a sync came from is recorded in its commit trailer, not in a file.
 
 ### Notes
 

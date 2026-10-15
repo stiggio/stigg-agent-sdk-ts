@@ -18,7 +18,7 @@
     "build": "rimraf dist && tsc -p tsconfig.json --noEmit && tsc -p tsconfig.build.json",
     "clean": "rimraf dist",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "lint": "eslint .",
+    "lint": "eslint . --max-warnings 0",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "test": "yarn test:repo",
