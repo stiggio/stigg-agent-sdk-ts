@@ -1,9 +1,9 @@
 /**
  * What the transformed files must look like on this side.
  *
- * Each rule is the open-source half of a transform in `.sync-manifest.json`. A sync that forgot one
- * leaves a repository that cannot be installed or type-checked outside the monorepo it came from -
- * which is the one thing this repository exists to disprove.
+ * Each rule is what `.sync-manifest.json` says a rewritten field becomes here. One forgotten leaves a
+ * repository that cannot be installed or type-checked on its own - which is the one thing this
+ * repository exists to disprove.
  *
  * Every path here is resolved from the pair's `openSource.path`, never assumed. The package sits at
  * the repository root today; if it ever moves under `packages/`, that is one field in the manifest
@@ -70,16 +70,16 @@ for (const pair of manifest.pairs) {
         ...pkg.peerDependencies,
       }).filter(([, range]) => LOCAL_PROTOCOL.test(range));
 
-      assert.deepEqual(ranges, [], 'these ranges only resolve inside the monorepo - see .sync-manifest.json');
+      assert.deepEqual(ranges, [], 'these ranges only resolve in the upstream workspace - see .sync-manifest.json');
     });
 
-    it('should type-check against this repository, not the monorepo above it', () => {
+    it('should type-check against this repository, standing alone', () => {
       const raw = readFileSync(join(ROOT, at('tsconfig.json')), 'utf8');
 
       assert.ok(!raw.includes('../../../'), 'tsconfig must not reach outside this repository');
       assert.ok(
         !/"paths"\s*:/.test(raw),
-        'dependencies resolve through node_modules here; a paths block is monorepo leakage',
+        'dependencies resolve through node_modules here; a paths block does not belong',
       );
     });
 

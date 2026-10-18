@@ -1,7 +1,6 @@
 name: CI
 
-# What a reader can run locally, run on every change. The point is that the mirror is demonstrably
-# intact - that the code published here is the code that works.
+# What a reader can run locally, run on every change: the code published here is the code that works.
 on:
   pull_request:
   push:
@@ -47,7 +46,6 @@ jobs:
       - name: Typecheck
         run: yarn typecheck
 
-  # `build` joins this job with the source, in the first sync: there is nothing to compile yet.
   test:
     name: test
     runs-on: ubuntu-latest
@@ -69,6 +67,9 @@ jobs:
 
       - name: Install dependencies
         run: yarn install --immutable
+
+      - name: Build
+        run: yarn build
 
       - name: Test
         run: yarn test

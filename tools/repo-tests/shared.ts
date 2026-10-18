@@ -1,8 +1,8 @@
 /**
  * Shared helpers for the repository guards.
  *
- * The guards read the index rather than the working tree: `git ls-files` is what a sync PR actually
- * carries, and a file that is not tracked cannot leak, drift, or fail to mirror.
+ * The guards read the index rather than the working tree: `git ls-files` is what a pull request
+ * actually carries, and a file that is not tracked cannot leak or drift.
  */
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
