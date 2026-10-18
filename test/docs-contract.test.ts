@@ -29,7 +29,7 @@ const code = sources()
   .join('\n');
 
 // `docs/instances.md` is held back from the open-source mirror for now, so the list is the
-// documents that are actually here. Declared as a transform in `.sync-manifest.json`.
+// documents that are actually here. Recorded in `repo-contract.json`.
 const docs = ['README.md', join('docs', 'instances.md'), join('examples', 'README.md')].filter((doc) =>
   existsSync(join(ROOT, doc)),
 );

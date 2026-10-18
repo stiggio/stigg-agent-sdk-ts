@@ -1,13 +1,13 @@
 /**
- * What the transformed files must look like on this side.
+ * The package stands on its own.
  *
- * Each rule is what `.sync-manifest.json` says a rewritten field becomes here. One forgotten leaves a
- * repository that cannot be installed or type-checked on its own - which is the one thing this
- * repository exists to disprove.
+ * It is written inside a larger workspace, and the things that make it work there - a local
+ * dependency protocol, compiler paths pointing at sibling builds - mean nothing once it is here.
+ * A missed one leaves a repository that cannot be installed or type-checked, which is the one
+ * thing this repository exists to disprove.
  *
- * Every path here is resolved from the pair's `openSource.path`, never assumed. The package sits at
- * the repository root today; if it ever moves under `packages/`, that is one field in the manifest
- * and these checks follow it without being touched.
+ * Paths come from `repo-contract.json` rather than being assumed: the package sits at the root
+ * today, and if it ever moves under `packages/` that is one field, not an edit here.
  */
 import assert from 'node:assert/strict';
 import { existsSync, readFileSync } from 'node:fs';
@@ -26,25 +26,23 @@ type PackageJson = {
   peerDependencies?: Record<string, string>;
 };
 
-type Manifest = {
-  pairs: { id: string; openSource: { path: string } }[];
-};
+type Contract = { package: { path: string } };
 
 /** Ranges that only mean something inside the monorepo's workspace. */
 const LOCAL_PROTOCOL = /^(workspace|file|link|portal):/;
 
-const manifest = readJson<Manifest>('.sync-manifest.json');
+const contract = readJson<Contract>('repo-contract.json');
 
-for (const pair of manifest.pairs) {
-  const dir = pair.openSource.path === '.' ? '' : pair.openSource.path;
+{
+  const dir = contract.package.path === '.' ? '' : contract.package.path;
   const at = (file: string) => (dir ? `${dir}/${file}` : file);
 
-  describe(`transform contract: ${dir || 'the package at the repository root'}`, () => {
+  describe(`standalone: ${dir || 'the package at the repository root'}`, () => {
     const manifestPath = at('package.json');
 
     if (!existsSync(join(ROOT, manifestPath))) {
       it('should have a manifest once the source has arrived', () => {
-        assert.ok(true, `${manifestPath} arrives with the first sync for pair "${pair.id}"`);
+        assert.ok(true, `${manifestPath} arrives with the SDK source`);
       });
       return;
     }
@@ -70,7 +68,7 @@ for (const pair of manifest.pairs) {
         ...pkg.peerDependencies,
       }).filter(([, range]) => LOCAL_PROTOCOL.test(range));
 
-      assert.deepEqual(ranges, [], 'these ranges only resolve in the upstream workspace - see .sync-manifest.json');
+      assert.deepEqual(ranges, [], 'these ranges only resolve in the workspace the SDK is written in');
     });
 
     it('should type-check against this repository, standing alone', () => {
