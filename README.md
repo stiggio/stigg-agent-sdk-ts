@@ -84,11 +84,11 @@ graph LR
 
 Three things happen around a call you already make:
 
-| | | |
-| --- | --- | --- |
-| **1. Check** | before the call | synchronous, and a refusal is a *commercial* event — offer a top-up, do not crash |
-| **2. Execute** | your call, unchanged | the vendor's own client, own types, own streaming |
-| **3. Ingest** | after the call | asynchronous and post-hoc; metering must never break a run |
+|                |                      |                                                                                   |
+| -------------- | -------------------- | --------------------------------------------------------------------------------- |
+| **1. Check**   | before the call      | synchronous, and a refusal is a _commercial_ event — offer a top-up, do not crash |
+| **2. Execute** | your call, unchanged | the vendor's own client, own types, own streaming                                 |
+| **3. Ingest**  | after the call       | asynchronous and post-hoc; metering must never break a run                        |
 
 Metering and enforcement are deliberately not one component. One fails open, the other fails
 closed, and conflating them is how an outage takes an application down.
@@ -99,11 +99,11 @@ closed, and conflating them is how an outage takes an application down.
 
 `Anthropic` · `OpenAI` · `Gemini` · `Groq` · `Mistral` · `Ollama` · `TypeSafe`
 
-**Gateways** — what was actually *charged*, and which model actually served after routing:
+**Gateways** — what was actually _charged_, and which model actually served after routing:
 
 `Amazon Bedrock` · `Cloudflare Workers AI` · `Databricks` · `LiteLLM` · `OpenRouter`
 
-Each binding is written against the *shape a vendor returns*, not against its SDK — so installing
+Each binding is written against the _shape a vendor returns_, not against its SDK — so installing
 this package pulls in **no vendor packages at all**, and you install only the one you use.
 
 `wrap()` recognises the vendor from the client's own shape. It throws, naming what it knows,
@@ -111,13 +111,13 @@ rather than handing back a client that quietly meters nothing.
 
 ## 🧩 Beyond a single call
 
-| You want to | Use |
-| --- | --- |
-| Govern a client | `stigg.wrap(client, { stiggContext })` |
-| Gate without a client to wrap | `stigg.check(context)` |
-| Meter something you measured yourself | `stigg.report(context, metrics)` |
-| Give an agent its own budget | `stigg.register({ customerId, agentId, budget })` |
-| Meter a gateway you operate | `client.stigg.headers()` out, `stigg.ingestFromHeaders(...)` back |
+| You want to                           | Use                                                               |
+| ------------------------------------- | ----------------------------------------------------------------- |
+| Govern a client                       | `stigg.wrap(client, { stiggContext })`                            |
+| Gate without a client to wrap         | `stigg.check(context)`                                            |
+| Meter something you measured yourself | `stigg.report(context, metrics)`                                  |
+| Give an agent its own budget          | `stigg.register({ customerId, agentId, budget })`                 |
+| Meter a gateway you operate           | `client.stigg.headers()` out, `stigg.ingestFromHeaders(...)` back |
 
 One wrapped client serves every customer and every agent: the context is an argument, given once
 at `wrap` as a default and overridable inside any single call. That is what a multi-tenant server

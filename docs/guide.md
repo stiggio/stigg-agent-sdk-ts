@@ -152,7 +152,7 @@ socket are shared while the governance REST client is not. See
 [what the cache promises](#what-the-cache-promises) for what that means for `close()`.
 
 **A customer given at `wrap` is a default, not a scope.** One wrapped client can serve every
-tenant, so naming a customer there means every call that does not override it bills _that_ one —
+tenant, so naming a customer there means every call that does not override it bills *that* one —
 correctly, silently, and forever if the client outlives the request. It is the right shape for a
 single-tenant process and the wrong one for a server, which is why the example above leaves it
 out and the types then require it per call.
@@ -191,7 +191,7 @@ wrap the chat to govern a conversation:
 
 ```ts
 const ai = new GoogleGenAI({ apiKey });
-const models = stigg.wrap(ai, { stiggContext }); // one-shot calls
+const models = stigg.wrap(ai, { stiggContext });     // one-shot calls
 const chat = stigg.wrap(ai.chats.create({ model }), { stiggContext }); // a conversation
 ```
 
@@ -247,25 +247,25 @@ Reporting defaults to Stigg's event API (see the ingest table further down), and
 matched by **name**. A wrapped client names each call after the call — the name someone reading
 that vendor's API would have guessed — so these are what your meters filter on:
 
-| Binding                      | Event name                                                                                                                                                                                         | Fields a meter can aggregate                                                                                                                                                                                                                                                                                                                                                                           |
-| ---------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Anthropic                    | `anthropic.messages.create`                                                                                                                                                                        | `input_tokens`, `output_tokens`, `cache_read_input_tokens`, `cache_creation_input_tokens`, `total_tokens`                                                                                                                                                                                                                                                                                              |
-| OpenAI (chat)                | `openai.chat.completions.create`                                                                                                                                                                   | `prompt_tokens`, `completion_tokens`, `cached_tokens`, `total_tokens`                                                                                                                                                                                                                                                                                                                                  |
-| OpenAI (responses)           | `openai.responses.create`                                                                                                                                                                          | `input_tokens`, `output_tokens`, `cached_tokens`, `total_tokens`                                                                                                                                                                                                                                                                                                                                       |
-| Groq                         | `groq.chat.completions.create`                                                                                                                                                                     | the OpenAI chat set — one surface, because Groq serves no Responses endpoint                                                                                                                                                                                                                                                                                                                           |
-| OpenRouter                   | `openrouter.chat.completions.create`, `openrouter.responses.create`                                                                                                                                | the OpenAI set, plus `cost`                                                                                                                                                                                                                                                                                                                                                                            |
-| OpenRouter — its own SDK     | `openrouter.chat.send`, `openrouter.responses.send`                                                                                                                                                | the same set — `@openrouter/sdk` camelCases its counters and the recipe reads them back under the wire's names, so one meter covers either client                                                                                                                                                                                                                                                      |
-| LiteLLM                      | `litellm.chat.completions.create`, `litellm.responses.create`                                                                                                                                      | the OpenAI set, plus `cost`                                                                                                                                                                                                                                                                                                                                                                            |
-| Mistral                      | `mistral.chat.complete`, `mistral.chat.stream`, `mistral.chat.parse`, `mistral.chat.parseStream`, `mistral.fim.complete`, `mistral.fim.stream`, `mistral.agents.complete`, `mistral.agents.stream` | `prompt_tokens`, `completion_tokens`, `total_tokens` — the **wire's** names, not the camelCase its SDK renames them to                                                                                                                                                                                                                                                                                 |
-| Ollama                       | `ollama.chat`, `ollama.generate`                                                                                                                                                                   | `prompt_eval_count`, `eval_count`, `total_tokens` — self-hosted, so these measure tokens you served yourself rather than tokens anyone billed you for                                                                                                                                                                                                                                                  |
-| Bedrock                      | `bedrock.send`                                                                                                                                                                                     | `inputTokens`, `outputTokens`, `cacheReadInputTokens`, `cacheWriteInputTokens`, `totalTokens` — and no `cost`, because Bedrock states none                                                                                                                                                                                                                                                             |
-| Databricks                   | `databricks.chat.completions.create`, `databricks.responses.create`, `databricks.query`                                                                                                            | `prompt_tokens`, `completion_tokens`, `total_tokens`, `reasoning_tokens`, `cache_read_input_tokens`, `cache_creation_input_tokens` — and no `cost`, because Databricks states none on any response. `databricks.query` is the first-party client and reports the first three only; it camelCases the wire and is renamed back, so both clients report one vocabulary                                   |
-| Databricks — external models | `databricks-external.chat.completions.create`, `databricks-external.responses.create`, `databricks-external.query`                                                                                 | the same six. A separate vendor name because a different party is invoiced, and it is **opt-in**: the two routes are indistinguishable from the client, so naming it asserts something the SDK cannot check                                                                                                                                                                                            |
-| Cloudflare                   | `cloudflare.chat.completions.create`, `cloudflare.responses.create`, `cloudflare.messages.create`, `cloudflare.ai.run`                                                                             | the OpenAI set plus `cache_read_input_tokens`, `cache_creation_input_tokens` — the union across every wire it serves, and a call reports only the names its own route sent. No `cost` and no neuron count: neither Workers AI nor AI Gateway states a price on any response, so `cf_aig_log_id` rides as a dimension instead. A gateway **cache hit meters nothing**, because nobody was billed for it |
-| TypeSafe                     | `typesafe.systemOne`                                                                                                                                                                               | `input_tokens`, `output_tokens`, `total_tokens`                                                                                                                                                                                                                                                                                                                                                        |
-| Gemini                       | `gemini.models.generateContent`, `gemini.models.generateContentStream`                                                                                                                             | `promptTokenCount`, `candidatesTokenCount`, `cachedContentTokenCount`, `thoughtsTokenCount`, `toolUsePromptTokenCount`, `totalTokenCount`                                                                                                                                                                                                                                                              |
-| Gemini — a chat              | `gemini.chats.sendMessage`, `gemini.chats.sendMessageStream`                                                                                                                                       | the same five                                                                                                                                                                                                                                                                                                                                                                                          |
-| A gateway, out of process    | `<vendor>.proxied`                                                                                                                                                                                 | whatever the proxy declared its vendor to be                                                                                                                                                                                                                                                                                                                                                           |
+| Binding                   | Event name                                                          | Fields a meter can aggregate                                                              |
+| ------------------------- | ------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
+| Anthropic                 | `anthropic.messages.create`                                         | `input_tokens`, `output_tokens`, `cache_read_input_tokens`, `cache_creation_input_tokens`, `total_tokens` |
+| OpenAI (chat)             | `openai.chat.completions.create`                                    | `prompt_tokens`, `completion_tokens`, `cached_tokens`, `total_tokens`                     |
+| OpenAI (responses)        | `openai.responses.create`                                           | `input_tokens`, `output_tokens`, `cached_tokens`, `total_tokens`                          |
+| Groq                      | `groq.chat.completions.create`                                      | the OpenAI chat set — one surface, because Groq serves no Responses endpoint              |
+| OpenRouter                | `openrouter.chat.completions.create`, `openrouter.responses.create` | the OpenAI set, plus `cost`                                                               |
+| OpenRouter — its own SDK  | `openrouter.chat.send`, `openrouter.responses.send`                 | the same set — `@openrouter/sdk` camelCases its counters and the recipe reads them back under the wire's names, so one meter covers either client |
+| LiteLLM                   | `litellm.chat.completions.create`, `litellm.responses.create`       | the OpenAI set, plus `cost`                                                               |
+| Mistral                   | `mistral.chat.complete`, `mistral.chat.stream`, `mistral.chat.parse`, `mistral.chat.parseStream`, `mistral.fim.complete`, `mistral.fim.stream`, `mistral.agents.complete`, `mistral.agents.stream` | `prompt_tokens`, `completion_tokens`, `total_tokens` — the **wire's** names, not the camelCase its SDK renames them to |
+| Ollama                    | `ollama.chat`, `ollama.generate`                                    | `prompt_eval_count`, `eval_count`, `total_tokens` — self-hosted, so these measure tokens you served yourself rather than tokens anyone billed you for |
+| Bedrock                   | `bedrock.send`                                                      | `inputTokens`, `outputTokens`, `cacheReadInputTokens`, `cacheWriteInputTokens`, `totalTokens` — and no `cost`, because Bedrock states none |
+| Databricks                | `databricks.chat.completions.create`, `databricks.responses.create`, `databricks.query` | `prompt_tokens`, `completion_tokens`, `total_tokens`, `reasoning_tokens`, `cache_read_input_tokens`, `cache_creation_input_tokens` — and no `cost`, because Databricks states none on any response. `databricks.query` is the first-party client and reports the first three only; it camelCases the wire and is renamed back, so both clients report one vocabulary |
+| Databricks — external models | `databricks-external.chat.completions.create`, `databricks-external.responses.create`, `databricks-external.query` | the same six. A separate vendor name because a different party is invoiced, and it is **opt-in**: the two routes are indistinguishable from the client, so naming it asserts something the SDK cannot check |
+| Cloudflare                | `cloudflare.chat.completions.create`, `cloudflare.responses.create`, `cloudflare.messages.create`, `cloudflare.ai.run` | the OpenAI set plus `cache_read_input_tokens`, `cache_creation_input_tokens` — the union across every wire it serves, and a call reports only the names its own route sent. No `cost` and no neuron count: neither Workers AI nor AI Gateway states a price on any response, so `cf_aig_log_id` rides as a dimension instead. A gateway **cache hit meters nothing**, because nobody was billed for it |
+| TypeSafe                  | `typesafe.systemOne`                                                | `input_tokens`, `output_tokens`, `total_tokens`                                           |
+| Gemini                    | `gemini.models.generateContent`, `gemini.models.generateContentStream` | `promptTokenCount`, `candidatesTokenCount`, `cachedContentTokenCount`, `thoughtsTokenCount`, `toolUsePromptTokenCount`, `totalTokenCount` |
+| Gemini — a chat           | `gemini.chats.sendMessage`, `gemini.chats.sendMessageStream`        | the same five                                                                             |
+| A gateway, out of process | `<vendor>.proxied`                                                  | whatever the proxy declared its vendor to be                                              |
 
 Every metric rides the event under its own name, so **one event feeds as many features as you
 configure meters for** — that is why a turn costs one request however many counters it reported.
@@ -332,12 +332,13 @@ mapper.
 
 > **An attributed run is the other exception, and the SDK rounds it up for you.** Per-entity usage
 > is counted in whole units — governance validates its ingest as an integer and increments a Redis
-> counter with `HINCRBY` — so a fractional amount is rejected there _while the wallet still moves_.
+> counter with `HINCRBY` — so a fractional amount is rejected there *while the wallet still moves*.
 > The agent's budget would stop advancing with nothing in the response to say so.
 >
 > So a run naming an `agentId` rounds its wallet draw up, and logs that it did. A run with no
 > entity attribution reports the fraction as measured. Denominate the currency finely enough that
 > one unit is small, and the overcharge is noise; this goes away when governance counts fractions.
+
 
 #### Writing the mapper yourself
 
@@ -370,18 +371,18 @@ Gemini. Anthropic and TypeSafe publish none, so theirs is summed from counters t
 which is the only case where the SDK adds anything up. **Price the total or the breakdown, never
 both.**
 
-| Vendor           | Input-ish key      | Includes cached tokens?                                                                                                                                                                                                                                                                                                                                                                     |
-| ---------------- | ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Anthropic        | `input_tokens`     | **No** — cache keys are separate; the four sum correctly                                                                                                                                                                                                                                                                                                                                    |
-| OpenAI Chat      | `prompt_tokens`    | **Yes**, includes `cached_tokens`                                                                                                                                                                                                                                                                                                                                                           |
-| OpenAI Responses | `input_tokens`     | **Yes**, includes `cached_tokens`                                                                                                                                                                                                                                                                                                                                                           |
-| LangChain        | `input_tokens`     | **Yes**, includes both cache keys                                                                                                                                                                                                                                                                                                                                                           |
-| Gemini           | `promptTokenCount` | **Yes**, includes `cachedContentTokenCount`                                                                                                                                                                                                                                                                                                                                                 |
-| Databricks       | `prompt_tokens`    | **Unverified** — Databricks documents neither direction. It spells the pair with Anthropic's names (`cache_read_input_tokens`), whose counters sit beside the input count, so this SDK does not subtract them. Its stated `total_tokens` is read rather than computed, so the total is right either way — price the total, or verify against your own endpoint before pricing the breakdown |
+| Vendor           | Input-ish key   | Includes cached tokens?                                  |
+| ---------------- | --------------- | -------------------------------------------------------- |
+| Anthropic        | `input_tokens`  | **No** — cache keys are separate; the four sum correctly |
+| OpenAI Chat      | `prompt_tokens` | **Yes**, includes `cached_tokens`                        |
+| OpenAI Responses | `input_tokens`  | **Yes**, includes `cached_tokens`                        |
+| LangChain        | `input_tokens`  | **Yes**, includes both cache keys                        |
+| Gemini           | `promptTokenCount` | **Yes**, includes `cachedContentTokenCount`           |
+| Databricks       | `prompt_tokens` | **Unverified** — Databricks documents neither direction. It spells the pair with Anthropic's names (`cache_read_input_tokens`), whose counters sit beside the input count, so this SDK does not subtract them. Its stated `total_tokens` is read rather than computed, so the total is right either way — price the total, or verify against your own endpoint before pricing the breakdown |
 
 Gemini overlaps in both directions at once, so it is worth stating separately: pricing
 `promptTokenCount` **and** `cachedContentTokenCount` double-bills the cached tokens, while
-`thoughtsTokenCount` and `toolUsePromptTokenCount` sit _outside_ the two headline counters —
+`thoughtsTokenCount` and `toolUsePromptTokenCount` sit *outside* the two headline counters —
 leave them out of a table and a reasoning model's thinking tokens, usually the expensive half of
 the answer, are billed at nothing. The four add back up to the vendor's own `totalTokenCount`,
 which is the arithmetic to check a table against.
@@ -421,13 +422,13 @@ client and lives in `bindings/client/gateways/`, beside `bindings/client/provide
 are recipes over the same wrapper. One you **operate** is the opposite binding and lives in
 `bindings/proxy/`.
 
-| Binding                                          | Reached as                                                | Mechanism                                                                                | Can refuse?                                 |
-| ------------------------------------------------ | --------------------------------------------------------- | ---------------------------------------------------------------------------------------- | ------------------------------------------- |
-| Client                                           | `stigg.wrap(client, { stiggContext })`                    | gates the recipe's methods on a copy, vendor matched by shape                            | Yes — when the context names an entitlement |
-| Client — a gateway you **call**                  | `wrap(client, { recipe: openrouterRecipe() })`            | same wrapper; the recipe bills `usage.cost` and attributes `response.model`              | Yes, same as any client                     |
-| Client — a gateway whose cost is in a **header** | `wrap(client, { recipe: litellmRecipe() })`               | same wrapper; the recipe bills `x-litellm-response-cost` and attributes `response.model` | Yes, same as any client                     |
-| Client — a gateway that states **no** price      | `wrap(client, { recipe: databricksRecipe() })`            | same wrapper; no `cost` metric at all, and the model that answered is attributed instead | Yes, same as any client                     |
-| Gateway you **operate** (`bindings/proxy`)       | `client.stigg.headers()` → `stigg.ingestFromHeaders(...)` | attribution travels as `x-stigg-*` headers; `vendor` names the shape it observed         | **No — ingest only**                        |
+| Binding                                          | Reached as                                           | Mechanism                                                                                | Can refuse?                                |
+| ------------------------------------------------ | ---------------------------------------------------- | ---------------------------------------------------------------------------------------- | ------------------------------------------ |
+| Client                                           | `stigg.wrap(client, { stiggContext })`               | gates the recipe's methods on a copy, vendor matched by shape                            | Yes — when the context names an entitlement |
+| Client — a gateway you **call**                  | `wrap(client, { recipe: openrouterRecipe() })`       | same wrapper; the recipe bills `usage.cost` and attributes `response.model`              | Yes, same as any client                    |
+| Client — a gateway whose cost is in a **header** | `wrap(client, { recipe: litellmRecipe() })`          | same wrapper; the recipe bills `x-litellm-response-cost` and attributes `response.model` | Yes, same as any client                    |
+| Client — a gateway that states **no** price      | `wrap(client, { recipe: databricksRecipe() })`       | same wrapper; no `cost` metric at all, and the model that answered is attributed instead | Yes, same as any client                    |
+| Gateway you **operate** (`bindings/proxy`)       | `client.stigg.headers()` → `stigg.ingestFromHeaders(...)` | attribution travels as `x-stigg-*` headers; `vendor` names the shape it observed         | **No — ingest only**                       |
 
 A client run that names no `entitlement` lands in the same column as the gateway — metering
 without a gate — except that it is in-process, and naming one turns it back on.
@@ -442,23 +443,24 @@ is at the other end of it:
 
 ```ts
 // Groq, Together, Ollama, vLLM - anything OpenAI-compatible
-const client = stigg.wrap(new OpenAI({ baseURL: 'https://api.groq.com/openai/v1', apiKey: process.env.GROQ_API_KEY }), {
-  stiggContext: { customerId, entitlement: { currencyId: 'credits' } },
-});
+const client = stigg.wrap(
+  new OpenAI({ baseURL: 'https://api.groq.com/openai/v1', apiKey: process.env.GROQ_API_KEY }),
+  { stiggContext: { customerId, entitlement: { currencyId: 'credits' } } },
+);
 ```
 
 So `OpenAI` in that line names the **wire format**, not the vendor being billed. What differs is
 which recipe matches, and that decides what you can meter:
 
-| Pointed at                                                            | Recipe matched     | Events it emits            | Reports                           |
-| --------------------------------------------------------------------- | ------------------ | -------------------------- | --------------------------------- |
-| `https://openrouter.ai/api/v1`                                        | `openrouterRecipe` | `openrouter.*` (see below) | tokens, `cost`, model that served |
-| the LiteLLM proxy URL you configured                                  | `litellmRecipe`    | `litellm.*`                | tokens, `cost`, model that served |
-| `https://api.groq.com/openai/v1`                                      | `groqRecipe`       | `groq.*`                   | tokens only                       |
-| a Databricks workspace `/serving-endpoints`                           | `databricksRecipe` | `databricks.*`             | tokens, model that answered       |
-| `https://api.cloudflare.com/client/v4/accounts/<id>/ai/v1`            | `cloudflareRecipe` | `cloudflare.*`             | tokens only                       |
-| `https://gateway.ai.cloudflare.com/v1/<account>/<gateway>/<provider>` | `cloudflareRecipe` | `cloudflare.*`             | tokens, model that served, log id |
-| anything else OpenAI-compatible                                       | `openAIRecipe`     | `openai.*`                 | tokens only                       |
+| Pointed at                           | Recipe matched     | Events it emits                   | Reports                           |
+| ------------------------------------ | ------------------ | --------------------------------- | --------------------------------- |
+| `https://openrouter.ai/api/v1`       | `openrouterRecipe` | `openrouter.*` (see below)        | tokens, `cost`, model that served |
+| the LiteLLM proxy URL you configured | `litellmRecipe`    | `litellm.*`                       | tokens, `cost`, model that served |
+| `https://api.groq.com/openai/v1`     | `groqRecipe`       | `groq.*`                          | tokens only                       |
+| a Databricks workspace `/serving-endpoints`  | `databricksRecipe` | `databricks.*`                    | tokens, model that answered       |
+| `https://api.cloudflare.com/client/v4/accounts/<id>/ai/v1` | `cloudflareRecipe` | `cloudflare.*`                    | tokens only                       |
+| `https://gateway.ai.cloudflare.com/v1/<account>/<gateway>/<provider>` | `cloudflareRecipe` | `cloudflare.*`                    | tokens, model that served, log id |
+| anything else OpenAI-compatible      | `openAIRecipe`     | `openai.*`                        | tokens only                       |
 
 Each of those covers **both OpenAI surfaces**, and a surface is its own event: Chat Completions
 reports `<vendor>.chat.completions.create` and the Responses API reports
@@ -495,7 +497,7 @@ name to match.
 >
 > On both routes its streamed chunks carry no top-level `usage` — the counters ride `x_groq.usage`
 > on the final chunk — and that read is shared with `openAIRecipe` rather than copied, so a Groq
-> deployment on some _other_ base URL (`GROQ_BASE_URL` pointed at a proxy or a regional endpoint)
+> deployment on some *other* base URL (`GROQ_BASE_URL` pointed at a proxy or a regional endpoint)
 > is still metered correctly even though the hostname guard declines it. It reports `openai.*` in
 > that case; name `recipe: groqRecipe` at `wrap` to attribute it to Groq explicitly.
 >
@@ -543,14 +545,14 @@ name to match.
 > holds. Two things make it worth a recipe rather than the `openAIRecipe` row above.
 >
 > The first is that **the request does not say what model is being used.** On the classic route the
-> `model` argument is a serving _endpoint_ name the customer chose — `prod-chat` is legal, and it
+> `model` argument is a serving *endpoint* name the customer chose — `prod-chat` is legal, and it
 > may front DBRX, a Llama that Databricks hosts, or somebody's OpenAI account. The response's
 > `model` field is what recovers that, and `databricksRecipe` puts it on the ingest as a dimension.
 > Metered as `openai.*` the whole workspace is one undifferentiated stream.
 >
 > The second is **who gets invoiced**, and this one is a decision you have to make rather than one
 > the SDK can make for you. Foundation Model API traffic (`databricks-claude-*`, `databricks-llama-*`,
-> DBRX) is billed to your Databricks account in DBUs. An endpoint configured as an _external model_
+> DBRX) is billed to your Databricks account in DBUs. An endpoint configured as an *external model*
 > carries your own OpenAI or Anthropic key, and that provider invoices your account with them —
 > Databricks only estimates the figure, into `system.ai_gateway.external_model_spend`, and says it
 > is not liable for the difference. Same host, same path, same request, same response: **nothing on
@@ -576,7 +578,7 @@ name to match.
 >
 > **Both clients, one recipe.** `@databricks/sdk-modelservingquery` is Databricks' own JS client,
 > and its whole surface is one method — `client.query({ name, messages })`, reported as
-> `databricks.query`. It is a second _surface_ rather than a second vendor, because one Databricks
+> `databricks.query`. It is a second *surface* rather than a second vendor, because one Databricks
 > account is billed whichever client the application imported; splitting it would split one bill
 > across two meters. It is recognised automatically, so `wrap(client)` governs it with no recipe
 > named.
@@ -596,7 +598,7 @@ name to match.
 > **Cloudflare Workers AI is a provider, not a gateway.** Cloudflare runs these models on its own
 > GPUs and invoices them to your Cloudflare account, which is the test this package applies. The
 > `@cf/<author>/<model>` ids look like a reseller's catalogue and are not one — `<author>` is who
-> _made_ the weights, not who bills for running them, and `@cf/openai/gpt-oss-120b` is OpenAI's
+> *made* the weights, not who bills for running them, and `@cf/openai/gpt-oss-120b` is OpenAI's
 > open-weights release at Cloudflare's own per-token rate rather than OpenAI API pricing. (`@hf/…`
 > ids are Workers AI too, and about an eighth of the catalogue, so anything keying on the `@cf/`
 > prefix alone is wrong.)
@@ -702,14 +704,14 @@ That is the path `unitsPerTokens(currencyId, …)` puts you on, and it is why sw
 the only visible difference is whether `IngestResult.creditsConsumed` is filled in. Metrics named
 after a **feature** take one of the other two columns.
 
-|                        | A metric named after the currency                 | `ingest: 'async'` — the default     | `ingest: 'sync'`                                     |
-| ---------------------- | ------------------------------------------------- | ----------------------------------- | ---------------------------------------------------- |
-| Call                   | `consumeCredits` / `consumeCreditsAsync`          | `events.report` / `reportEvent`     | `usage.report` / `reportUsageBulk`                   |
-| Latency and rate limit | follows the mode                                  | low latency, much higher limit      | higher latency, lower limit                          |
-| The next check         | includes it under `'sync'`; lags under `'async'`  | lags while Stigg aggregates         | already includes the spend                           |
-| What you send          | a currency id and an amount                       | the call, as one event              | a `featureId` and a whole-number `value`, per metric |
-| Meter type             | **none — the wallet is drawn directly**           | **Raw events**, configured in Stigg | calculated / incremental                             |
-| What comes back        | a balance under `'sync'`, nothing under `'async'` | an acknowledgement                  | a credit balance                                     |
+|                        | A metric named after the currency       | `ingest: 'async'` — the default     | `ingest: 'sync'`                                     |
+| ---------------------- | --------------------------------------- | ----------------------------------- | ---------------------------------------------------- |
+| Call                   | `consumeCredits` / `consumeCreditsAsync` | `events.report` / `reportEvent`     | `usage.report` / `reportUsageBulk`                   |
+| Latency and rate limit | follows the mode                        | low latency, much higher limit      | higher latency, lower limit                          |
+| The next check         | includes it under `'sync'`; lags under `'async'` | lags while Stigg aggregates         | already includes the spend                           |
+| What you send          | a currency id and an amount             | the call, as one event              | a `featureId` and a whole-number `value`, per metric |
+| Meter type             | **none — the wallet is drawn directly** | **Raw events**, configured in Stigg | calculated / incremental                             |
+| What comes back        | a balance under `'sync'`, nothing under `'async'` | an acknowledgement        | a credit balance                                     |
 
 Async sends **one event for the whole turn**, every metric on its own dimension, because one event
 feeds any number of meters — fanning out per metric buys nothing and costs a request each. Sync
@@ -723,7 +725,7 @@ a usage report takes only a `featureId`, so a currency has to be drawn rather th
 > meantime — so a check made immediately after a draw can still see the balance from before it, and
 > approve a call the wallet could not afford. `'sync'` is what closes that window.
 
-**The match is exact.** A metric draws the wallet only when its name _equals_ the currency the
+**The match is exact.** A metric draws the wallet only when its name *equals* the currency the
 context checks. `unitsPerTokens('data_credit', …)` against `entitlement: { currencyId: 'credits' }`
 is a feature report named `data_credit`, not a draw on `credits` — so it needs a meter like any
 other feature, and silently meters nothing until one exists.
@@ -846,10 +848,10 @@ because it never asks.
 and there is no second network path that could fail or leak. The SDK names itself on the requests
 it was already making, and that is all:
 
-| Half                              | What it sends                                                                                       |
-| --------------------------------- | --------------------------------------------------------------------------------------------------- |
+| Half | What it sends |
+| --- | --- |
 | Cached reads and ingest (GraphQL) | `apollographql-client-name: agent-sdk-js`, `apollographql-client-version: <this package's version>` |
-| Governance (REST)                 | `X-SDK-CLIENT-NAME: agent-sdk-js`, `X-SDK-CLIENT-VERSION: <this package's version>`                 |
+| Governance (REST) | `X-SDK-CLIENT-NAME: agent-sdk-js`, `X-SDK-CLIENT-VERSION: <this package's version>` |
 
 No customer data, no prompts, no model output — the package name and its version, next to the
 process identity (`X-SDK-INSTANCE-ID` and friends) the Node SDK already sends.
@@ -1066,37 +1068,37 @@ there (or exporting it in your shell) overrides the fixture without editing `dem
 
 ### `.env` — credentials and endpoints
 
-| Variable                               | Default                                     | Purpose                                                                                                                                                                                                                                        |
-| -------------------------------------- | ------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `AGENT_SDK_ANTHROPIC_API_KEY`          | — (falls back to `ANTHROPIC_API_KEY`)       | Layers 1 and 3                                                                                                                                                                                                                                 |
-| `AGENT_SDK_ANTHROPIC_MODEL`            | `claude-opus-5`                             | Claude model for layers 1 and 3                                                                                                                                                                                                                |
-| `AGENT_SDK_OPENAI_API_KEY`             | — (falls back to `OPENAI_API_KEY`)          | The OpenAI client example                                                                                                                                                                                                                      |
-| `AGENT_SDK_OPENAI_MODEL`               | `gpt-5`                                     | Model for the OpenAI client example                                                                                                                                                                                                            |
-| `AGENT_SDK_GROQ_API_KEY`               | — (falls back to `GROQ_API_KEY`)            | The Groq client example. Blank ⇒ the offline mock                                                                                                                                                                                              |
-| `AGENT_SDK_GROQ_MODEL`                 | `llama-3.3-70b-versatile`                   | Model for the Groq client example                                                                                                                                                                                                              |
-| `AGENT_SDK_MISTRAL_API_KEY`            | — (falls back to `MISTRAL_API_KEY`)         | The Mistral client example. Blank ⇒ the offline mock                                                                                                                                                                                           |
-| `AGENT_SDK_MISTRAL_MODEL`              | `mistral-small-latest`                      | Model for the Mistral client example                                                                                                                                                                                                           |
-| `AGENT_SDK_OLLAMA_HOST`                | — (falls back to `OLLAMA_HOST`)             | Ollama is self-hosted, so a **host** stands in for the key: blank ⇒ the offline mock, set ⇒ that server (default `http://127.0.0.1:11434`)                                                                                                     |
-| `AGENT_SDK_OLLAMA_MODEL`               | `llama3.3`                                  | Model for the Ollama client example — must be pulled on that server first                                                                                                                                                                      |
-| `AGENT_SDK_OPENROUTER_API_KEY`         | — (falls back to `OPENROUTER_API_KEY`)      | Layer 2                                                                                                                                                                                                                                        |
-| `AGENT_SDK_GEMINI_API_KEY`             | —                                           | Falls back to `GEMINI_API_KEY` / `GOOGLE_API_KEY`. Absent, the Gemini example runs on the built-in mock                                                                                                                                        |
-| `AGENT_SDK_GEMINI_MODEL`               | `gemini-3.8-flash`                          | Model for the Gemini client example                                                                                                                                                                                                            |
-| `AGENT_SDK_OPENROUTER_MODEL`           | `anthropic/claude-opus-5`                   | Primary model requested from the gateway                                                                                                                                                                                                       |
-| `AGENT_SDK_OPENROUTER_FALLBACK_MODELS` | `anthropic/claude-sonnet-5,openai/gpt-5`    | Comma-separated fallbacks tried in order                                                                                                                                                                                                       |
-| `AGENT_SDK_BEDROCK_REGION`             | `us-east-1` (falls back to `AWS_REGION`)    | Region the Bedrock model is called in. There is no Bedrock key variable: AWS authenticates through its own credential chain, and the example asks that chain rather than looking for one                                                       |
-| `AGENT_SDK_BEDROCK_MODEL`              | `anthropic.claude-sonnet-4-5-20250929-v1:0` | Bedrock model id. Names one model exactly — Bedrock does not route, so there is no fallback list                                                                                                                                               |
-| `AGENT_SDK_LITELLM_API_KEY`            | — (falls back to `LITELLM_API_KEY`)         | Layer 2. Blank ⇒ the offline mock                                                                                                                                                                                                              |
-| `AGENT_SDK_CLOUDFLARE_API_KEY`         | none                                        | Cloudflare API token with Workers AI read access (falls back to `CLOUDFLARE_API_TOKEN`)                                                                                                                                                        |
-| `AGENT_SDK_CLOUDFLARE_ACCOUNT_ID`      | none                                        | Required by every `ai.run` call — it is part of the URL path, not the body                                                                                                                                                                     |
-| `AGENT_SDK_CLOUDFLARE_MODEL`           | `@cf/meta/llama-3.1-8b-instruct`            | A Workers AI model id. `@hf/…` ids are Workers AI too, so a matcher keyed on `@cf/` alone misses about an eighth of the catalogue                                                                                                              |
-| `AGENT_SDK_DATABRICKS_API_KEY`         | — (falls back to `DATABRICKS_TOKEN`)        | A workspace token — a PAT, or an OAuth M2M token. Blank ⇒ the offline mock. Read by both Databricks examples                                                                                                                                   |
-| `AGENT_SDK_DATABRICKS_BASE_URL`        | none                                        | Your workspace — customer-specific, so there is no default that could be right. `/serving-endpoints` is appended if you leave it off, and a PrivateLink workspace works because the recipe is handed this URL rather than recognising the host |
-| `AGENT_SDK_DATABRICKS_MODEL`           | `databricks-claude-sonnet-4-6`              | A serving **endpoint** name, not a model id — which is why the served model has to be read off the response. Read by both Databricks examples                                                                                                  |
-| `AGENT_SDK_DATABRICKS_EXTERNAL`        | unset                                       | `1` asserts the endpoint carries your own upstream key, so that provider invoices it rather than Databricks. An assertion the SDK cannot check — it switches both Databricks examples to `databricks-external.*`                               |
-| `AGENT_SDK_LITELLM_BASE_URL`           | `http://localhost:4000`                     | Your own proxy — self-hosted, so there is no public default                                                                                                                                                                                    |
-| `AGENT_SDK_LITELLM_MODEL`              | `gpt-5`                                     | A model **group** from the proxy's config, not a provider slug                                                                                                                                                                                 |
-| `STIGG_API_KEY`                        | —                                           | **Server** key (`server-…`). A publishable `client-…` key fails every call with `IdentityForbidden`. Blank ⇒ the built-in Stigg mock                                                                                                           |
-| `STIGG_BASE_URL`                       | `https://api.stigg.io`                      | Which environment that key belongs to                                                                                                                                                                                                          |
+| Variable                               | Default                                  | Purpose                                                                                                                              |
+| -------------------------------------- | ---------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| `AGENT_SDK_ANTHROPIC_API_KEY`          | — (falls back to `ANTHROPIC_API_KEY`)    | Layers 1 and 3                                                                                                                       |
+| `AGENT_SDK_ANTHROPIC_MODEL`            | `claude-opus-5`                          | Claude model for layers 1 and 3                                                                                                      |
+| `AGENT_SDK_OPENAI_API_KEY`             | — (falls back to `OPENAI_API_KEY`)       | The OpenAI client example                                                                                                            |
+| `AGENT_SDK_OPENAI_MODEL`               | `gpt-5`                                  | Model for the OpenAI client example                                                                                                  |
+| `AGENT_SDK_GROQ_API_KEY`               | — (falls back to `GROQ_API_KEY`)         | The Groq client example. Blank ⇒ the offline mock                                                                                     |
+| `AGENT_SDK_GROQ_MODEL`                 | `llama-3.3-70b-versatile`                | Model for the Groq client example                                                                                                    |
+| `AGENT_SDK_MISTRAL_API_KEY`            | — (falls back to `MISTRAL_API_KEY`)      | The Mistral client example. Blank ⇒ the offline mock                                                                                  |
+| `AGENT_SDK_MISTRAL_MODEL`              | `mistral-small-latest`                   | Model for the Mistral client example                                                                                                 |
+| `AGENT_SDK_OLLAMA_HOST`                | — (falls back to `OLLAMA_HOST`)          | Ollama is self-hosted, so a **host** stands in for the key: blank ⇒ the offline mock, set ⇒ that server (default `http://127.0.0.1:11434`) |
+| `AGENT_SDK_OLLAMA_MODEL`               | `llama3.3`                               | Model for the Ollama client example — must be pulled on that server first                                                            |
+| `AGENT_SDK_OPENROUTER_API_KEY`         | — (falls back to `OPENROUTER_API_KEY`)   | Layer 2                                                                                                                              |
+| `AGENT_SDK_GEMINI_API_KEY`             | —                                        | Falls back to `GEMINI_API_KEY` / `GOOGLE_API_KEY`. Absent, the Gemini example runs on the built-in mock                               |
+| `AGENT_SDK_GEMINI_MODEL`               | `gemini-3.8-flash`                       | Model for the Gemini client example                                                                                                  |
+| `AGENT_SDK_OPENROUTER_MODEL`           | `anthropic/claude-opus-5`                | Primary model requested from the gateway                                                                                             |
+| `AGENT_SDK_OPENROUTER_FALLBACK_MODELS` | `anthropic/claude-sonnet-5,openai/gpt-5` | Comma-separated fallbacks tried in order                                                                                             |
+| `AGENT_SDK_BEDROCK_REGION`             | `us-east-1` (falls back to `AWS_REGION`) | Region the Bedrock model is called in. There is no Bedrock key variable: AWS authenticates through its own credential chain, and the example asks that chain rather than looking for one |
+| `AGENT_SDK_BEDROCK_MODEL`              | `anthropic.claude-sonnet-4-5-20250929-v1:0` | Bedrock model id. Names one model exactly — Bedrock does not route, so there is no fallback list                                   |
+| `AGENT_SDK_LITELLM_API_KEY`            | — (falls back to `LITELLM_API_KEY`)      | Layer 2. Blank ⇒ the offline mock                                                                                                    |
+| `AGENT_SDK_CLOUDFLARE_API_KEY`         | none                                     | Cloudflare API token with Workers AI read access (falls back to `CLOUDFLARE_API_TOKEN`)                                              |
+| `AGENT_SDK_CLOUDFLARE_ACCOUNT_ID`      | none                                     | Required by every `ai.run` call — it is part of the URL path, not the body                                                           |
+| `AGENT_SDK_CLOUDFLARE_MODEL`            | `@cf/meta/llama-3.1-8b-instruct`         | A Workers AI model id. `@hf/…` ids are Workers AI too, so a matcher keyed on `@cf/` alone misses about an eighth of the catalogue    |
+| `AGENT_SDK_DATABRICKS_API_KEY`         | — (falls back to `DATABRICKS_TOKEN`)     | A workspace token — a PAT, or an OAuth M2M token. Blank ⇒ the offline mock. Read by both Databricks examples |
+| `AGENT_SDK_DATABRICKS_BASE_URL`        | none                                     | Your workspace — customer-specific, so there is no default that could be right. `/serving-endpoints` is appended if you leave it off, and a PrivateLink workspace works because the recipe is handed this URL rather than recognising the host |
+| `AGENT_SDK_DATABRICKS_MODEL`           | `databricks-claude-sonnet-4-6`           | A serving **endpoint** name, not a model id — which is why the served model has to be read off the response. Read by both Databricks examples |
+| `AGENT_SDK_DATABRICKS_EXTERNAL`        | unset                                    | `1` asserts the endpoint carries your own upstream key, so that provider invoices it rather than Databricks. An assertion the SDK cannot check — it switches both Databricks examples to `databricks-external.*` |
+| `AGENT_SDK_LITELLM_BASE_URL`           | `http://localhost:4000`                  | Your own proxy — self-hosted, so there is no public default                                                                          |
+| `AGENT_SDK_LITELLM_MODEL`              | `gpt-5`                                  | A model **group** from the proxy's config, not a provider slug                                                                       |
+| `STIGG_API_KEY`                        | —                                        | **Server** key (`server-…`). A publishable `client-…` key fails every call with `IdentityForbidden`. Blank ⇒ the built-in Stigg mock |
+| `STIGG_BASE_URL`                       | `https://api.stigg.io`                   | Which environment that key belongs to                                                                                                |
 
 ### What the examples gate and meter against — in `examples/demo.env`
 
@@ -1109,11 +1111,11 @@ The SDK's own settings are arguments rather than variables, which is why none of
 environment, and `wrap(client, { stiggContext })` — overridable inside any call's own parameters —
 for what a call is governed by.
 
-| Variable                     | Default                 | Purpose                                                                                                                                                                                                                                                                                                                                                                                             |
-| ---------------------------- | ----------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `AGENT_SDK_DEMO_CURRENCY_ID` | `credits` _(mock only)_ | `stiggContext.entitlement` — credit currency to budget against. The default is the examples' own and applies only offline; the SDK has none. Naming neither this nor a feature is legal and means the calls **meter without gating** — `entitlement` is itself the enforcement switch. `two-agents` and the gateway examples refuse to run that way, since a budget draining is their whole subject |
-| `AGENT_SDK_DEMO_FEATURE_ID`  | —                       | `stiggContext.entitlement` — metered feature instead; exclusive with the above                                                                                                                                                                                                                                                                                                                      |
-| `AGENT_SDK_DEMO_EVENT_NAME`  | —                       | `stiggContext.eventName` — overrides the name derived from the vendor call                                                                                                                                                                                                                                                                                                                          |
+| Variable                         | Default                 | Purpose                                                                            |
+| -------------------------------- | ----------------------- | ---------------------------------------------------------------------------------- |
+| `AGENT_SDK_DEMO_CURRENCY_ID`     | `credits` *(mock only)* | `stiggContext.entitlement` — credit currency to budget against. The default is the examples' own and applies only offline; the SDK has none. Naming neither this nor a feature is legal and means the calls **meter without gating** — `entitlement` is itself the enforcement switch. `two-agents` and the gateway examples refuse to run that way, since a budget draining is their whole subject |
+| `AGENT_SDK_DEMO_FEATURE_ID`      | —                       | `stiggContext.entitlement` — metered feature instead; exclusive with the above      |
+| `AGENT_SDK_DEMO_EVENT_NAME`      | —                       | `stiggContext.eventName` — overrides the name derived from the vendor call          |
 
 ### `examples/demo.env` — demo fixtures
 
@@ -1122,24 +1124,24 @@ Scaffolding, not configuration. Your own application supplies all of this from i
 Each fixture has **three** states, because "no `demo.env` at all" and "I want no agent" are
 different things and an absent variable cannot mean both:
 
-| The variable is…      | Against the mock    | With a real `STIGG_API_KEY`                      |
-| --------------------- | ------------------- | ------------------------------------------------ |
-| **absent**            | the default below   | unset — the demo degrades, or says what it needs |
-| **set**               | that value          | that value                                       |
-| **present but blank** | unset, deliberately | unset, deliberately                              |
+| The variable is…      | Against the mock              | With a real `STIGG_API_KEY`                     |
+| --------------------- | ----------------------------- | ----------------------------------------------- |
+| **absent**            | the default below             | unset — the demo degrades, or says what it needs |
+| **set**               | that value                    | that value                                      |
+| **present but blank** | unset, deliberately           | unset, deliberately                             |
 
 The defaults are mock-only on purpose: against an environment you can write to, a guessed
 `customer-acme` is either someone else's tenant or one nobody asked for.
 
-| Variable                              | Default _(mock only)_   | Unset ⇒                                                                                                                                                                                                                                                 |
-| ------------------------------------- | ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `AGENT_SDK_DEMO_CUSTOMER_ID`          | `customer-acme`         | **Error.** Every governance call is scoped to a tenant, and the examples will not invent one                                                                                                                                                            |
-| `AGENT_SDK_DEMO_TEAM_ID`              | `team-research`         | The agents are **roots** — no ancestor budget binds them. `two-agents` needs one and says so                                                                                                                                                            |
-| `AGENT_SDK_DEMO_AGENT_ID`             | `agent-support-bot`     | **No agent at all**: checks and usage land on the customer's own pool. Blank it to see that path against the mock. Each client example appends its vendor (`…-anthropic`)                                                                               |
-| `AGENT_SDK_DEMO_ENTITY_TYPE_ID`       | `agent` _(mock only)_   | `register`'s own `entityTypeId` — the entity type agents are provisioned as                                                                                                                                                                             |
-| `AGENT_SDK_DEMO_ATTRIBUTION_KEY`      | `agentId` _(mock only)_ | `stiggContext.attributionKey` — the key that type identifies its agents under. **Both or neither**: the SDK defaults neither half, because a guessed key resolves no entity and the spend lands on the customer looking exactly like an ungoverned call |
-| `AGENT_SDK_OFFLINE`                   | empty                   | Set to `1` to force the mocks even when keys are present                                                                                                                                                                                                |
-| `AGENT_SDK_DEMO_MOCK_GOVERNANCE_FAIL` | empty                   | Mock only: make the runtime check return `503`                                                                                                                                                                                                          |
+| Variable                              | Default *(mock only)* | Unset ⇒                                                               |
+| ------------------------------------- | --------------------- | --------------------------------------------------------------------- |
+| `AGENT_SDK_DEMO_CUSTOMER_ID`          | `customer-acme`       | **Error.** Every governance call is scoped to a tenant, and the examples will not invent one |
+| `AGENT_SDK_DEMO_TEAM_ID`              | `team-research`       | The agents are **roots** — no ancestor budget binds them. `two-agents` needs one and says so |
+| `AGENT_SDK_DEMO_AGENT_ID`             | `agent-support-bot`   | **No agent at all**: checks and usage land on the customer's own pool. Blank it to see that path against the mock. Each client example appends its vendor (`…-anthropic`) |
+| `AGENT_SDK_DEMO_ENTITY_TYPE_ID` | `agent` *(mock only)* | `register`'s own `entityTypeId` — the entity type agents are provisioned as |
+| `AGENT_SDK_DEMO_ATTRIBUTION_KEY` | `agentId` *(mock only)* | `stiggContext.attributionKey` — the key that type identifies its agents under. **Both or neither**: the SDK defaults neither half, because a guessed key resolves no entity and the spend lands on the customer looking exactly like an ungoverned call |
+| `AGENT_SDK_OFFLINE`                   | empty                 | Set to `1` to force the mocks even when keys are present              |
+| `AGENT_SDK_DEMO_MOCK_GOVERNANCE_FAIL` | empty                 | Mock only: make the runtime check return `503`                        |
 
 Install dependencies from the **repo root**:
 
@@ -1154,25 +1156,25 @@ All commands work from anywhere in the repo, and all of them run with no keys at
 `example-client-typesafe`, whose vendor the built-in mock does not speak. That one still needs no
 Stigg account.
 
-| Command                      | Runs                                                                  | What it shows                                                                                                                                                                                                                                                                     |
-| ---------------------------- | --------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `example-client-anthropic`   | [`client/anthropic.ts`](./examples/client/anthropic.ts)               | A governed chat. One `wrap()` gates and meters every turn                                                                                                                                                                                                                         |
-| `example-client-openai`      | [`client/openai.ts`](./examples/client/openai.ts)                     | The same script, a different vendor — governance is not vendor-specific work                                                                                                                                                                                                      |
-| `example-client-gemini`      | [`client/gemini.ts`](./examples/client/gemini.ts)                     | The same script again, on a vendor that counts in its own names and streams running totals                                                                                                                                                                                        |
-| `example-client-groq`        | [`client/groq.ts`](./examples/client/groq.ts)                         | Groq through the `openai` client: matched by hostname, so it reports `groq.*`, and its streamed counters come off `x_groq`                                                                                                                                                        |
-| `example-client-mistral`     | [`client/mistral.ts`](./examples/client/mistral.ts)                   | A vendor whose SDK camelCases the wire — `chat.stream` is its own method, and the metered names are the wire's                                                                                                                                                                    |
-| `example-client-ollama`      | [`client/ollama.ts`](./examples/client/ollama.ts)                     | A self-hosted engine that bills nobody: a flat client, counters flat on the response, and capacity rather than spend                                                                                                                                                              |
-| `example-client-openrouter`  | [`client/openrouter.ts`](./examples/client/openrouter.ts)             | `openrouterRecipe()` billing the credits actually charged instead of a token count                                                                                                                                                                                                |
-| `example-client-litellm`     | [`client/litellm.ts`](./examples/client/litellm.ts)                   | The same script against a self-hosted proxy. Streams, so it meters tokens — see the gateway example for why                                                                                                                                                                       |
-| `example-client-databricks`  | [`client/databricks.ts`](./examples/client/databricks.ts)             | An `OpenAI` client pointed at a workspace `/serving-endpoints`. The request names an **endpoint**, not a model, so the served model on the way back is the thing to watch. `AGENT_SDK_DATABRICKS_EXTERNAL=1` asserts the external-model route                                     |
-| `example-client-typesafe`    | [`client/typesafe.ts`](./examples/client/typesafe.ts)                 | A non-chat client: typed questions, batched or one per call. **Needs a real TypeSafe key**                                                                                                                                                                                        |
-| `example-two-agents`         | [`client/two-agents.ts`](./examples/client/two-agents.ts)             | Two agents, one team: a sibling denied by its own cap, then the survivor denied by the team above it                                                                                                                                                                              |
-| `example-gateway-openrouter` | [`gateway/openrouter.ts`](./examples/gateway/openrouter.ts)           | The two gateway topologies: calling one gates, operating one only ingests. `example-gateway` runs this one                                                                                                                                                                        |
-| `example-gateway-litellm`    | [`gateway/litellm.ts`](./examples/gateway/litellm.ts)                 | The same two topologies when the cost is in a header: real spend, then tokens, from one request                                                                                                                                                                                   |
-| `example-gateway-bedrock`    | [`gateway/bedrock.ts`](./examples/gateway/bedrock.ts)                 | A gateway that states no price: tokens are all there is to meter, and nothing proxies it                                                                                                                                                                                          |
-| `example-gateway-databricks` | [`gateway/databricks.ts`](./examples/gateway/databricks.ts)           | Databricks' **own** client, `@databricks/sdk-modelservingquery` — one method, `client.query(…)`, governed by the same recipe as the row above and reported as `databricks.query`. Shows the camelCase counters renamed back to the wire's, and a budget draining until it refuses |
-| `example-gateway-cloudflare` | [`gateway/cloudflare.ts`](./examples/gateway/cloudflare.ts)           | Cloudflare's own client (`ai.run`). The one example that does not stream — a streamed `ai.run` hands back raw SSE bytes, so there is no usage block to meter                                                                                                                      |
-| `example-setup`              | [`shared/setup-governance.ts`](./examples/shared/setup-governance.ts) | Seeds a customer, a pool and per-entity budgets. Idempotent                                                                                                                                                                                                                       |
+| Command                     | Runs                                                                  | What it shows                                                                                               |
+| --------------------------- | --------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| `example-client-anthropic`  | [`client/anthropic.ts`](../examples/client/anthropic.ts)               | A governed chat. One `wrap()` gates and meters every turn                       |
+| `example-client-openai`     | [`client/openai.ts`](../examples/client/openai.ts)                     | The same script, a different vendor — governance is not vendor-specific work                                |
+| `example-client-gemini`     | [`client/gemini.ts`](../examples/client/gemini.ts)                     | The same script again, on a vendor that counts in its own names and streams running totals                  |
+| `example-client-groq`       | [`client/groq.ts`](../examples/client/groq.ts)                         | Groq through the `openai` client: matched by hostname, so it reports `groq.*`, and its streamed counters come off `x_groq`  |
+| `example-client-mistral`    | [`client/mistral.ts`](../examples/client/mistral.ts)                   | A vendor whose SDK camelCases the wire — `chat.stream` is its own method, and the metered names are the wire's              |
+| `example-client-ollama`     | [`client/ollama.ts`](../examples/client/ollama.ts)                     | A self-hosted engine that bills nobody: a flat client, counters flat on the response, and capacity rather than spend        |
+| `example-client-openrouter` | [`client/openrouter.ts`](../examples/client/openrouter.ts)             | `openrouterRecipe()` billing the credits actually charged instead of a token count                          |
+| `example-client-litellm`    | [`client/litellm.ts`](../examples/client/litellm.ts)                   | The same script against a self-hosted proxy. Streams, so it meters tokens — see the gateway example for why |
+| `example-client-databricks` | [`client/databricks.ts`](../examples/client/databricks.ts)             | An `OpenAI` client pointed at a workspace `/serving-endpoints`. The request names an **endpoint**, not a model, so the served model on the way back is the thing to watch. `AGENT_SDK_DATABRICKS_EXTERNAL=1` asserts the external-model route |
+| `example-client-typesafe`   | [`client/typesafe.ts`](../examples/client/typesafe.ts)                 | A non-chat client: typed questions, batched or one per call. **Needs a real TypeSafe key**                  |
+| `example-two-agents`        | [`client/two-agents.ts`](../examples/client/two-agents.ts)             | Two agents, one team: a sibling denied by its own cap, then the survivor denied by the team above it        |
+| `example-gateway-openrouter`| [`gateway/openrouter.ts`](../examples/gateway/openrouter.ts)           | The two gateway topologies: calling one gates, operating one only ingests. `example-gateway` runs this one  |
+| `example-gateway-litellm`   | [`gateway/litellm.ts`](../examples/gateway/litellm.ts)                 | The same two topologies when the cost is in a header: real spend, then tokens, from one request             |
+| `example-gateway-bedrock`   | [`gateway/bedrock.ts`](../examples/gateway/bedrock.ts)                 | A gateway that states no price: tokens are all there is to meter, and nothing proxies it                    |
+| `example-gateway-databricks` | [`gateway/databricks.ts`](../examples/gateway/databricks.ts)          | Databricks' **own** client, `@databricks/sdk-modelservingquery` — one method, `client.query(…)`, governed by the same recipe as the row above and reported as `databricks.query`. Shows the camelCase counters renamed back to the wire's, and a budget draining until it refuses |
+| `example-gateway-cloudflare` | [`gateway/cloudflare.ts`](../examples/gateway/cloudflare.ts)           | Cloudflare's own client (`ai.run`). The one example that does not stream — a streamed `ai.run` hands back raw SSE bytes, so there is no usage block to meter |
+| `example-setup`             | [`shared/setup-governance.ts`](../examples/shared/setup-governance.ts) | Seeds a customer, a pool and per-entity budgets. Idempotent                                                 |
 
 `example-client` is an alias for the Anthropic one. Prefix any of them with `AGENT_SDK_OFFLINE=1`
 to force the mocks even when keys are present.
@@ -1190,11 +1192,11 @@ yarn example-client-openrouter
 yarn example-client-litellm
 ```
 
-All five run [the same script](./examples/client/core/chat.ts) — same governance wiring, same
+All five run [the same script](../examples/client/core/chat.ts) — same governance wiring, same
 output, not one line of it vendor-specific. What differs is a helper per vendor
-([anthropic](./examples/client/anthropic.ts), [openai](./examples/client/openai.ts),
-[gemini](./examples/client/gemini.ts), [openrouter](./examples/client/openrouter.ts),
-[litellm](./examples/client/litellm.ts)) holding the four things that genuinely differ:
+([anthropic](../examples/client/anthropic.ts), [openai](../examples/client/openai.ts),
+[gemini](../examples/client/gemini.ts), [openrouter](../examples/client/openrouter.ts),
+[litellm](../examples/client/litellm.ts)) holding the four things that genuinely differ:
 which key to read, how to build the client, how to stream a turn, and where usage sits on the
 response. That is the same split the SDK makes internally, for the same reason.
 
@@ -1351,27 +1353,27 @@ published packages like any other - there is no workspace indirection here.
 
 ## 8. Troubleshooting
 
-| Symptom                                                          | Cause and fix                                                                                                                                                                                                                                                                                                                                        |
-| ---------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `403 GovernanceNotEnabled`                                       | The account has no governance. Checks and usage still work; `register()` throws, because there is nowhere to create the agent entity. Contact Stigg to enable it.                                                                                                                                                                                    |
-| `No STIGG_API_KEY`                                               | Set it to a server key for the environment in `STIGG_BASE_URL`, or leave it blank to run on the built-in mock.                                                                                                                                                                                                                                       |
-| `503` and every turn denied                                      | The governance cache is unavailable and `checkErrorAction` is `deny`. The default is `allow`, so this is a policy that was asked for; drop it to keep running through the outage, or relax a single call with `stiggContext: { checkErrorAction: 'allow' }`.                                                                                         |
-| `usage value must be a whole number to report against a feature` | `POST /api/v1/usage` takes integers. Report against a **credit currency** instead, which takes fractions, or raise the unit size in your `usageMapper` so the division comes out whole.                                                                                                                                                              |
-| `... is backed by a raw-events meter`                            | A `sync` run reported to a feature only a meter can fill. Report that run with `ingest: 'async'` (the default), or point it at a feature whose value your application computes.                                                                                                                                                                      |
-| Ingest reports `ok=true` but usage stays 0                       | Under `async` an acknowledgement is all the event API returns. Check a raw-events meter filters on the event name (see the event table above); against a **local** Stigg, also that the `ingest-usage-stream-processor` and `calculate-usage-stream-processor` lambdas are running. `ingest: 'sync'` answers with a balance and will say so instead. |
-| Still denied right after a top-up                                | Budgets reset per cadence window, so a spent agent stays spent. Re-run `example-setup --agent-limit N` with a higher limit, or use a new `AGENT_SDK_DEMO_AGENT_ID`.                                                                                                                                                                                  |
-| Denial names the customer, not the agent                         | Customer-level mode (no governance), or the context named no `agentId` and carried no attribution dimensions of its own.                                                                                                                                                                                                                             |
-| Denial names an agent you did not pass                           | A `dimensions` key resolves an entity that already exists in the account. The agent belongs in `stiggContext.agentId`; `dimensions` gates on whatever it names, registered here or not.                                                                                                                                                              |
-| `401` / `authentication_error`                                   | The key is present but wrong. Clear it from `.env` to fall back to the offline mock, or fix it.                                                                                                                                                                                                                                                      |
-| `400 credit balance is too low` (Anthropic)                      | Add credits under Billing, or set `AGENT_SDK_OFFLINE=1` to run on the mock.                                                                                                                                                                                                                                                                          |
-| `402` / insufficient credits (OpenRouter)                        | Add credits under Settings → Credits, or set `AGENT_SDK_OFFLINE=1` to run on the mock.                                                                                                                                                                                                                                                               |
-| `400` naming a model (OpenRouter)                                | A slug in `AGENT_SDK_OPENROUTER_MODEL` / `AGENT_SDK_OPENROUTER_FALLBACK_MODELS` does not exist. Check <https://openrouter.ai/models>.                                                                                                                                                                                                                |
-| `ECONNREFUSED` on port 4000 (LiteLLM)                            | No proxy is running there. Start one (`litellm --model gpt-4o --port 4000`), fix `AGENT_SDK_LITELLM_BASE_URL`, or clear `AGENT_SDK_LITELLM_API_KEY` to fall back to the mock.                                                                                                                                                                        |
-| `400` / unknown model group (LiteLLM)                            | `AGENT_SDK_LITELLM_MODEL` must name a group from the proxy's own config, not a provider slug. List them with `curl $AGENT_SDK_LITELLM_BASE_URL/v1/models`.                                                                                                                                                                                           |
-| LiteLLM turns bill `units=1`, not spend                          | Expected on a streamed call: `x-litellm-response-cost` is flushed before the body, so there is no cost to read. Call non-streaming to bill real spend.                                                                                                                                                                                               |
-| `Cannot find module`                                             | Run `yarn install` from the repo root, not from this directory.                                                                                                                                                                                                                                                                                      |
-| Chat prints nothing and exits                                    | Input is not a TTY (piped input hits end-of-file). Try `printf 'hi\nexit\n' \| yarn example-client-anthropic`.                                                                                                                                                                                                                                       |
-| A CLI hangs after the last line                                  | The Node SDK keeps a background cache alive. Call `gov.flush({ close: true })`, as the examples do.                                                                                                                                                                                                                                                  |
+| Symptom                                     | Cause and fix                                                                                                                                                                                                                                                                                                                                        |
+| ------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `403 GovernanceNotEnabled`                  | The account has no governance. Checks and usage still work; `register()` throws, because there is nowhere to create the agent entity. Contact Stigg to enable it.                                                                                                                                                                                    |
+| `No STIGG_API_KEY`                          | Set it to a server key for the environment in `STIGG_BASE_URL`, or leave it blank to run on the built-in mock.                                                                                                                                                                                                                                       |
+| `503` and every turn denied                 | The governance cache is unavailable and `checkErrorAction` is `deny`. The default is `allow`, so this is a policy that was asked for; drop it to keep running through the outage, or relax a single call with `stiggContext: { checkErrorAction: 'allow' }`. |
+| `usage value must be a whole number to report against a feature` | `POST /api/v1/usage` takes integers. Report against a **credit currency** instead, which takes fractions, or raise the unit size in your `usageMapper` so the division comes out whole.                                                                                                                                                 |
+| `... is backed by a raw-events meter`       | A `sync` run reported to a feature only a meter can fill. Report that run with `ingest: 'async'` (the default), or point it at a feature whose value your application computes.                                                                                                                                                                      |
+| Ingest reports `ok=true` but usage stays 0  | Under `async` an acknowledgement is all the event API returns. Check a raw-events meter filters on the event name (see the event table above); against a **local** Stigg, also that the `ingest-usage-stream-processor` and `calculate-usage-stream-processor` lambdas are running. `ingest: 'sync'` answers with a balance and will say so instead. |
+| Still denied right after a top-up           | Budgets reset per cadence window, so a spent agent stays spent. Re-run `example-setup --agent-limit N` with a higher limit, or use a new `AGENT_SDK_DEMO_AGENT_ID`.                                                                                                                                                                                  |
+| Denial names the customer, not the agent    | Customer-level mode (no governance), or the context named no `agentId` and carried no attribution dimensions of its own.                                                                                                                                                                                                                             |
+| Denial names an agent you did not pass      | A `dimensions` key resolves an entity that already exists in the account. The agent belongs in `stiggContext.agentId`; `dimensions` gates on whatever it names, registered here or not.                                                                                                                                                              |
+| `401` / `authentication_error`              | The key is present but wrong. Clear it from `.env` to fall back to the offline mock, or fix it.                                                                                                                                                                                                                                                      |
+| `400 credit balance is too low` (Anthropic) | Add credits under Billing, or set `AGENT_SDK_OFFLINE=1` to run on the mock.                                                                                                                                                                                                                                                                          |
+| `402` / insufficient credits (OpenRouter)   | Add credits under Settings → Credits, or set `AGENT_SDK_OFFLINE=1` to run on the mock.                                                                                                                                                                                                                                                               |
+| `400` naming a model (OpenRouter)           | A slug in `AGENT_SDK_OPENROUTER_MODEL` / `AGENT_SDK_OPENROUTER_FALLBACK_MODELS` does not exist. Check <https://openrouter.ai/models>.                                                                                                                                                                                                                |
+| `ECONNREFUSED` on port 4000 (LiteLLM)       | No proxy is running there. Start one (`litellm --model gpt-4o --port 4000`), fix `AGENT_SDK_LITELLM_BASE_URL`, or clear `AGENT_SDK_LITELLM_API_KEY` to fall back to the mock.                                                                                                                                                                        |
+| `400` / unknown model group (LiteLLM)       | `AGENT_SDK_LITELLM_MODEL` must name a group from the proxy's own config, not a provider slug. List them with `curl $AGENT_SDK_LITELLM_BASE_URL/v1/models`.                                                                                                                                                                                           |
+| LiteLLM turns bill `units=1`, not spend     | Expected on a streamed call: `x-litellm-response-cost` is flushed before the body, so there is no cost to read. Call non-streaming to bill real spend.                                                                                                                                                                                               |
+| `Cannot find module`                        | Run `yarn install` from the repo root, not from this directory.                                                                                                                                                                                                                                                                                      |
+| Chat prints nothing and exits               | Input is not a TTY (piped input hits end-of-file). Try `printf 'hi\nexit\n' \| yarn example-client-anthropic`.                                                                                                                                                                                                     |
+| A CLI hangs after the last line             | The Node SDK keeps a background cache alive. Call `gov.flush({ close: true })`, as the examples do.                                                                                                                                                                                                                                                  |
 
 ## 9. Layout
 
@@ -1386,7 +1388,8 @@ src/
               node-sdk-engine.ts                      the only file importing @stigg/node-server-sdk
               rest-governance-engine.ts               the only file importing @stigg/typescript
               composite-engine.ts create-engine.ts    routing per operation, and who picked what
-  core/       run-handle.ts                           the handle every binding consumes
+  core/       context.ts session.ts                   the context every call carries; the session that meters
+              dimensions.ts hooks.ts                    event dimensions, and the seams a caller can observe
   bindings/   client/core/                           the recipe contract, the registry, the wrapper
               client/providers/ client/gateways/     a model provider, or a gateway you call
               proxy/                                 a gateway you operate: headers in, ingest only
@@ -1396,9 +1399,10 @@ testing/      mock-stigg-server.ts                    the Stigg stand-in the exa
 
 examples/
   shared/     demo-env, the two mocks, setup-governance    scaffolding every example uses
-  client/     core/{chat,vendor} + anthropic|openai|gemini|openrouter|litellm|typesafe   a helper per vendor
+  client/     core/{chat,vendor} + anthropic|openai|gemini|groq|mistral|ollama|typesafe   a helper per vendor
+              databricks|litellm|openrouter                 gateways reached as a client
               two-agents                                   two siblings, one team budget between them
-  gateway/    core/{gateway,vendor,proxy} + openrouter|litellm  calling one; operating one on a real socket
+  gateway/    core/{gateway,vendor,proxy} + openrouter|litellm|bedrock|cloudflare|databricks  calling one; operating one on a real socket
 ```
 
 The examples mirror the bindings directory deliberately — a generic core plus a thin per-vendor

@@ -30,9 +30,12 @@ const code = sources()
 
 // `docs/instances.md` is held back from the open-source mirror for now, so the list is the
 // documents that are actually here. Recorded in `repo-contract.json`.
-const docs = ['README.md', join('docs', 'instances.md'), join('examples', 'README.md')].filter((doc) =>
-  existsSync(join(ROOT, doc)),
-);
+const docs = [
+  'README.md',
+  join('docs', 'guide.md'),
+  join('docs', 'instances.md'),
+  join('examples', 'README.md'),
+].filter((doc) => existsSync(join(ROOT, doc)));
 
 /**
  * Names the lifecycle used to have. A rename leaves these behind in prose that still reads as

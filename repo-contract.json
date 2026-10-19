@@ -5,7 +5,7 @@
     "path": "."
   },
   "paths": {
-    "copied": ["src/**", "test/**", "testing/**", "docs/**", "tsconfig.build.json"],
+    "copied": ["src/**", "test/**", "testing/**", "tsconfig.build.json"],
     "rewritten": [
       "package.json",
       "tsconfig.json",
@@ -87,7 +87,7 @@
     },
     ".env.template": {
       "rewrite": "values stripped; keys only",
-      "why": "A template shipping defaults invites someone to keep them. The README documents each variable and its default, and the examples compile their own."
+      "why": "A template shipping defaults invites someone to keep them. The guide documents each variable and its default, and the examples compile their own."
     }
   },
   "rewrites": {
