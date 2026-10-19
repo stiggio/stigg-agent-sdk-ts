@@ -5,14 +5,15 @@
     "path": "."
   },
   "paths": {
-    "copied": ["src/**", "test/**", "testing/**", "tsconfig.build.json", "docs/**"],
+    "copied": ["src/**", "test/**", "testing/**", "tsconfig.build.json"],
     "rewritten": [
       "package.json",
       "tsconfig.json",
       ".claude/**",
       "test/docs-contract.test.ts",
       ".env.template",
-      "examples/**"
+      "examples/**",
+      "docs/**"
     ],
     "ours": [
       ".gitattributes",
@@ -87,6 +88,10 @@
     ".env.template": {
       "rewrite": "values stripped; keys only",
       "why": "A template shipping defaults invites someone to keep them. The guide documents each variable and its default, and the examples compile their own."
+    },
+    "docs/**": {
+      "rewrite": "commands; and the layout section drops the `docs/instances.md` row",
+      "why": "The guide is written in a monorepo, where a script is `yarn workspace <package> run <name>`. Here the package is the repository, so the same line is `yarn <name>` - and the guide must not name `docs/instances.md`, which this repository deliberately does not have."
     }
   },
   "rewrites": {

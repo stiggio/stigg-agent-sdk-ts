@@ -39,7 +39,7 @@ to `string`. Two lists describing one thing drift; this is what makes that a tes
 of a billing one.
 
 **Docs name only APIs that exist.**
-`test/docs-contract.test.ts` checks the identifiers the README, `docs/instances.md` and
+`test/docs-contract.test.ts` checks the identifiers the README, `docs/guide.md` and
 `examples/README.md` name against what the package exports. Documentation is the one contract with
 no compiler behind it.
 

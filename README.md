@@ -39,7 +39,7 @@ Two lines. Wrap the client you already have, and keep calling it the way you alr
 import Anthropic from '@anthropic-ai/sdk';
 import { StiggAgentSDK } from '@stigg/agent-sdk-js';
 
-const stigg = new StiggAgentSDK(process.env.STIGG_API_KEY);
+const stigg = new StiggAgentSDK(); // reads STIGG_SERVER_API_KEY
 
 const client = stigg.wrap(new Anthropic(), {
   stiggContext: { customerId: 'customer-acme', entitlement: { currencyId: 'credits' } },

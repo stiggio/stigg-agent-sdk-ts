@@ -8,7 +8,10 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { matchesAny, readJson, trackedFiles } from './shared';
+import { readFileSync } from 'node:fs';
+import { basename, join } from 'node:path';
+
+import { ROOT, matchesAny, readJson, trackedFiles } from './shared';
 
 type Contract = {
   version: number;
@@ -47,5 +50,21 @@ describe('tracked paths', () => {
   it('should not track anything it says is absent', () => {
     const present = trackedFiles().filter((file) => matchesAny(file, contract.paths.absent));
     assert.deepEqual(present, [], 'the contract says these do not exist here');
+  });
+
+  // Not tracking the file is half of it. The guide is written where that document exists, so its
+  // layout section names it; copied here unchanged, it points a reader at a path this repository
+  // has decided not to have. Nothing else notices - a sentence naming a missing file still reads
+  // perfectly well.
+  it('should not send a reader to a document it says is absent', () => {
+    const missingDocuments = contract.paths.absent.filter((path) => path.endsWith('.md'));
+    const documents = trackedFiles('README.md', 'docs', 'examples', '.claude').filter((file) => file.endsWith('.md'));
+
+    const dangling = documents.flatMap((file) => {
+      const text = readFileSync(join(ROOT, file), 'utf8');
+      return missingDocuments.filter((path) => text.includes(basename(path))).map((path) => `${file} -> ${path}`);
+    });
+
+    assert.deepEqual(dangling, [], 'these name a document this repository does not have');
   });
 });
