@@ -97,11 +97,20 @@ closed, and conflating them is how an outage takes an application down.
 
 **Providers** — token counts, cache counters, streaming usage:
 
-`Anthropic` · `OpenAI` · `Gemini` · `Groq` · `Mistral` · `Ollama` · `TypeSafe`
+|                                                                                                                          | Provider  |                                                                                                                         | Provider |
+| ------------------------------------------------------------------------------------------------------------------------ | --------- | ----------------------------------------------------------------------------------------------------------------------- | -------- |
+| <img src="https://raw.githubusercontent.com/stiggio/stigg-agent-sdk-ts/main/docs/logos/anthropic.svg" width="18" alt=""> | Anthropic | <img src="https://raw.githubusercontent.com/stiggio/stigg-agent-sdk-ts/main/docs/logos/mistral.svg" width="18" alt="">  | Mistral  |
+| <img src="https://raw.githubusercontent.com/stiggio/stigg-agent-sdk-ts/main/docs/logos/openai.svg" width="18" alt="">    | OpenAI    | <img src="https://raw.githubusercontent.com/stiggio/stigg-agent-sdk-ts/main/docs/logos/ollama.svg" width="18" alt="">   | Ollama   |
+| <img src="https://raw.githubusercontent.com/stiggio/stigg-agent-sdk-ts/main/docs/logos/gemini.svg" width="18" alt="">    | Gemini    | <img src="https://raw.githubusercontent.com/stiggio/stigg-agent-sdk-ts/main/docs/logos/typesafe.png" width="18" alt=""> | TypeSafe |
+| <img src="https://raw.githubusercontent.com/stiggio/stigg-agent-sdk-ts/main/docs/logos/groq.svg" width="18" alt="">      | Groq      |                                                                                                                         |          |
 
 **Gateways** — what was actually _charged_, and which model actually served after routing:
 
-`Amazon Bedrock` · `Cloudflare Workers AI` · `Databricks` · `LiteLLM` · `OpenRouter`
+|                                                                                                                           | Gateway               |                                                                                                                           | Gateway    |
+| ------------------------------------------------------------------------------------------------------------------------- | --------------------- | ------------------------------------------------------------------------------------------------------------------------- | ---------- |
+| <img src="https://raw.githubusercontent.com/stiggio/stigg-agent-sdk-ts/main/docs/logos/bedrock.svg" width="18" alt="">    | Amazon Bedrock        | <img src="https://raw.githubusercontent.com/stiggio/stigg-agent-sdk-ts/main/docs/logos/litellm.png" width="18" alt="">    | LiteLLM    |
+| <img src="https://raw.githubusercontent.com/stiggio/stigg-agent-sdk-ts/main/docs/logos/cloudflare.svg" width="18" alt=""> | Cloudflare Workers AI | <img src="https://raw.githubusercontent.com/stiggio/stigg-agent-sdk-ts/main/docs/logos/openrouter.svg" width="18" alt=""> | OpenRouter |
+| <img src="https://raw.githubusercontent.com/stiggio/stigg-agent-sdk-ts/main/docs/logos/databricks.svg" width="18" alt=""> | Databricks            |                                                                                                                           |            |
 
 Each binding is written against the _shape a vendor returns_, not against its SDK — so installing
 this package pulls in **no vendor packages at all**, and you install only the one you use.
