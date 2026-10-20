@@ -196,6 +196,21 @@ function toPlacement(input: RegisterInput): EntityPlacement | undefined {
 export class StiggAgentSDK {
   readonly config: ResolvedConfig;
 
+  /**
+   * What this object says about itself when something logs it.
+   *
+   * Without these, `console.log(stigg)` walks the whole object - the config, the engine once it
+   * has started, and the vendor clients each of those holds - and any of them may carry a key.
+   * The redacted view names what is worth seeing and stops there.
+   */
+  toJSON(): Record<string, unknown> {
+    return { baseUrl: this.config.baseUrl, apiKey: '[redacted]', started: this.engineState !== undefined };
+  }
+
+  [Symbol.for('nodejs.util.inspect.custom')](): Record<string, unknown> {
+    return this.toJSON();
+  }
+
   private readonly clients: ClientRegistry;
   /** Every session this SDK handed out, so `flush()` can drain all of them at once. */
   private readonly sessions = new Set<GovernanceSession>();

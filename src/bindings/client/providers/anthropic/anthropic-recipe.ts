@@ -126,10 +126,24 @@ function restate(into: FlatTokenUsage, stated: FlatTokenUsage | null | undefined
  * stream produces one measurement rather than one per event.
  */
 function observeStream(stream: any, ingest: (measurement: Measurement) => void): void {
-  if (!stream || typeof stream[Symbol.asyncIterator] !== 'function') return;
+  if (!stream) return;
 
-  const iterate = stream[Symbol.asyncIterator].bind(stream) as () => AsyncIterable<AnthropicStreamEvent>;
-  stream[Symbol.asyncIterator] = async function* gatedIterator() {
+  // Anthropic's `Stream` keeps an `iterator` factory on the instance and routes everything through
+  // it - `[Symbol.asyncIterator]()` returns `this.iterator()`, and so does `tee()`. Patching the
+  // async iterator alone left a teed stream reading the raw source: Anthropic billed the call and
+  // nothing here metered it. Patch the factory where there is one, and only the factory, or the
+  // vendor's own delegation would run the accounting twice over the same chunks.
+  const makeIterator =
+    typeof stream.iterator === 'function'
+      ? (stream.iterator.bind(stream) as () => AsyncIterator<AnthropicStreamEvent>)
+      : undefined;
+  const iterate =
+    typeof stream[Symbol.asyncIterator] === 'function'
+      ? (stream[Symbol.asyncIterator].bind(stream) as () => AsyncIterable<AnthropicStreamEvent>)
+      : undefined;
+  if (!makeIterator && !iterate) return;
+
+  async function* gated(source: AsyncIterable<AnthropicStreamEvent>) {
     // What the stream has said so far, in the vendor's own shape. Kept flat rather than converted
     // per event: both views of the call - the vendor's names and the normalized counters - are
     // derived from it once at the end, so neither can be accumulated out of step with the other.
@@ -140,7 +154,7 @@ function observeStream(stream: any, ingest: (measurement: Measurement) => void):
     // What the stream actually produced, for the case where it never gets to say.
     let chars = 0;
     try {
-      for await (const event of iterate()) {
+      for await (const event of source) {
         if (event?.type === 'message_start') stated = restate(stated, event.message?.usage);
         if (event?.type === 'message_delta') {
           stated = restate(stated, event.usage);
@@ -174,7 +188,17 @@ function observeStream(stream: any, ingest: (measurement: Measurement) => void):
         ...(estimated ? { estimated: true as const } : {}),
       });
     }
-  };
+  }
+
+  if (makeIterator) {
+    stream.iterator = function gatedIterator() {
+      return gated({ [Symbol.asyncIterator]: () => makeIterator() } as AsyncIterable<AnthropicStreamEvent>);
+    };
+  } else {
+    stream[Symbol.asyncIterator] = function gatedAsyncIterator() {
+      return gated(iterate!());
+    };
+  }
 }
 
 export const anthropicRecipe = {

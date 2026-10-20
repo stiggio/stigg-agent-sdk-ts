@@ -50,7 +50,7 @@ const BUILTINS = new Set([
 const scripts = Object.keys(readJson<{ scripts?: Record<string, string> }>('package.json').scripts ?? {});
 
 /** Everything that tells a reader what to type. */
-const documents = trackedFiles('README.md', 'examples', '.claude').filter((file) =>
+const documents = trackedFiles('README.md', 'docs', 'examples', '.claude').filter((file) =>
   /\.(md|ts)$|\.template$/.test(file),
 );
 

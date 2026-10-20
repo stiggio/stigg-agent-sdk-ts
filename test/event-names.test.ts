@@ -175,7 +175,8 @@ describe('what a gated call actually reports', () => {
 
 describe('the README is the contract, so it cannot drift from the code', () => {
   it('documents exactly the event names the recipes derive', async () => {
-    const readme = await readFile(join(__dirname, '..', 'README.md'), 'utf8');
+    // The reference, which is where the event-name table lives. The README is the front page.
+    const readme = await readFile(join(__dirname, '..', 'docs', 'guide.md'), 'utf8');
     // Every backticked name in the file that is shaped like one of ours, wherever it is written -
     // the table, the meter example, a paragraph. A name is only useful if every mention is right.
     const documented = [

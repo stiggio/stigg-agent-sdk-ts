@@ -45,7 +45,7 @@ describe('the example scripts', () => {
   });
 
   it('names every script in the package README, so the table stays complete', () => {
-    const readme = read('README.md');
+    const readme = read('docs/guide.md');
     // Aliases are listed beside the script they alias rather than on their own row.
     const aliases = new Set(['example-client', 'example-gateway']);
     const undocumented = exampleScripts

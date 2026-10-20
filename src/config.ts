@@ -206,7 +206,7 @@ export function resolveConfig(options: StiggAgentSDKOptions = {}): ResolvedConfi
     );
   }
 
-  return {
+  const config = {
     ...parsed,
     cache: options.cache,
     client: options.client,
@@ -215,6 +215,30 @@ export function resolveConfig(options: StiggAgentSDKOptions = {}): ResolvedConfi
     onError:
       options.onError ?? ((error, context) => logger.warn(`[stigg] ${context.operation} failed: ${error.message}`)),
   };
+
+  // The key reads exactly as before and stops being *printed*. `config` is a public property, so
+  // `console.log(stigg)`, `util.inspect`, `JSON.stringify` and any structured logger that walks
+  // the object were all putting a live server key into whatever collects those lines. Hiding the
+  // one field rather than the whole object keeps `baseUrl` and the rest debuggable.
+  Object.defineProperty(config, 'apiKey', { value: parsed.apiKey, enumerable: false, writable: true });
+
+  // Hiding our own field is not enough. A caller who passes `client` hands over an object that
+  // carries its own copy of the key, so `console.log(stigg.config)` reached it through there -
+  // and no amount of hiding `config.apiKey` helps with somebody else's object. So the config
+  // renders itself: what is useful to debug, and a placeholder where a secret would be.
+  //
+  // It cannot stop `console.log(stigg.config.client)`, which is the caller's own object and theirs
+  // to log. What it stops is this SDK's surfaces printing it for them.
+  const redacted = () => ({
+    ...config,
+    apiKey: config.apiKey ? '[redacted]' : undefined,
+    client: config.client ? '[client supplied by the caller]' : undefined,
+  });
+  for (const key of ['toJSON', Symbol.for('nodejs.util.inspect.custom')] as (string | symbol)[]) {
+    Object.defineProperty(config, key, { value: redacted, enumerable: false, writable: false });
+  }
+
+  return config;
 }
 
 /** The slice of config the engine factory needs. */

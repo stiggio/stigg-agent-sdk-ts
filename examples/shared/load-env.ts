@@ -8,7 +8,7 @@
  * Both are git-ignored and both are optional: a missing file is a no-op for dotenv, and every
  * fixture has the same value as its default in `demo-env.ts`, so the examples run on a fresh
  * clone with neither file present - against the built-in mocks, since there is no key either,
- * which is also the only mode those defaults apply in. Supply a real `STIGG_API_KEY` and the
+ * which is also the only mode those defaults apply in. Supply a real `STIGG_SERVER_API_KEY` and the
  * fixtures stop defaulting: see `demo-env.ts` for what each one's absence then costs.
  *
  * The split is the point: everything in `demo.env` is something a real application already knows

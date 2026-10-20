@@ -37,7 +37,11 @@ export const text = (value: string | undefined): string | undefined => {
 };
 
 export function resolveStiggEnv(): StiggEnv {
-  const configuredKey = text(process.env.STIGG_API_KEY);
+  // `STIGG_SERVER_API_KEY` is the name the SDK itself reads and the one every Stigg SDK shares.
+  // `STIGG_API_KEY` is still honoured so an existing `.env` keeps working - the two named
+  // different things for a while, and filling in the template then leaving the constructor empty
+  // used to throw.
+  const configuredKey = text(process.env.STIGG_SERVER_API_KEY) ?? text(process.env.STIGG_API_KEY);
   // AGENT_SDK_OFFLINE forces the mock even when a key is present - a key can be valid while the
   // account has no credits, which would otherwise make the examples unrunnable.
   const offline = !configuredKey || isTruthy(process.env.AGENT_SDK_OFFLINE);
@@ -60,7 +64,7 @@ export function resolveStiggEnv(): StiggEnv {
 export function requireKey(env: StiggEnv): string {
   if (env.apiKey) return env.apiKey;
   throw new Error(
-    'No STIGG_API_KEY to run against - set it to a server key for the environment in ' +
+    'No STIGG_SERVER_API_KEY to run against - set it to a server key for the environment in ' +
       'STIGG_BASE_URL, and clear AGENT_SDK_OFFLINE, which forces the built-in mock even when a ' +
       'key is configured.',
   );

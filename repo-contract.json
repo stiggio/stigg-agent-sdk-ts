@@ -1,0 +1,130 @@
+{
+  "version": 1,
+  "description": "What this repository must look like. The SDK is written at Stigg and copied in; a copied file keeps its path, and a handful are rewritten on the way. These are the invariants that hold here, and tools/repo-tests enforces every one of them.",
+  "package": {
+    "path": "."
+  },
+  "paths": {
+    "copied": ["README.md", "src/**", "test/**", "testing/**", "tsconfig.build.json"],
+    "rewritten": [
+      "package.json",
+      "tsconfig.json",
+      ".claude/**",
+      "test/docs-contract.test.ts",
+      ".env.template",
+      "examples/**",
+      "docs/**"
+    ],
+    "ours": [
+      ".gitattributes",
+      ".github/**",
+      ".gitignore",
+      ".nvmrc",
+      ".prettierignore",
+      ".prettierrc",
+      ".yarn/**",
+      ".yarnrc.yml",
+      "CHANGELOG.md",
+      "CONTRIBUTING.md",
+      "LICENSE",
+      "SECURITY.md",
+      "eslint.config.mjs",
+      "repo-contract.json",
+      "tools/**",
+      "yarn.lock"
+    ],
+    "absent": [".env", "docs/instances.md", "examples/demo.env", "project.json"]
+  },
+  "files": {
+    "package.json": {
+      "values": {
+        "dependencies.@stigg/node-server-sdk": "^6.1.0",
+        "repository.url": "git+https://github.com/stiggio/stigg-agent-sdk-ts.git",
+        "repository.directory": null,
+        "scripts.build": "rimraf dist && tsc -p tsconfig.json --noEmit && tsc -p tsconfig.build.json",
+        "scripts.lint": "eslint . --max-warnings 0",
+        "scripts.test": "yarn test:repo && tsx --test test/*.test.ts"
+      },
+      "present": [
+        "private",
+        "packageManager",
+        "scripts.clean",
+        "scripts.typecheck",
+        "scripts.format",
+        "scripts.format:check",
+        "scripts.test:repo",
+        "devDependencies.@eslint/js",
+        "devDependencies.@types/node",
+        "devDependencies.eslint",
+        "devDependencies.eslint-config-prettier",
+        "devDependencies.eslint-plugin-prettier",
+        "devDependencies.prettier",
+        "devDependencies.rimraf",
+        "devDependencies.typescript",
+        "devDependencies.typescript-eslint"
+      ],
+      "absent": ["nx", "files", "publishConfig"],
+      "why": "Nothing is released from here, so the publishing fields are absent and `private` stays. `main` and `typings` point at `src`, as they do at the source."
+    },
+    "tsconfig.json": {
+      "values": {
+        "extends": null,
+        "compilerOptions.paths": null,
+        "include": ["src/**/*", "examples/**/*", "test/**/*", "testing/**/*", "tools/**/*"]
+      },
+      "why": "Self-contained: the compiler options the source is written against, inlined, with no workspace paths to redirect. `tools/**` is this repository's own addition."
+    },
+    ".claude/**": {
+      "rewrite": "commands; absent-documents"
+    },
+    "examples/**": {
+      "rewrite": "commands"
+    },
+    "test/docs-contract.test.ts": {
+      "rewrite": "the document list filters for what is present, because `docs/instances.md` is not here; and the forbidden-term list keeps only the terms a reader here can act on",
+      "why": "A missing document would otherwise throw and fail the suite. The filter is a no-op once the document arrives. The dropped terms are spellings that only exist where this package is written, and naming them to ban them would be the one place they appear."
+    },
+    ".env.template": {
+      "rewrite": "values stripped; keys only",
+      "why": "A template shipping defaults invites someone to keep them. The guide documents each variable and its default, and the examples compile their own."
+    },
+    "docs/**": {
+      "rewrite": "commands; absent-documents",
+      "why": "The guide is written in a monorepo, where a script is `yarn workspace <package> run <name>`. Here the package is the repository, so the same line is `yarn <name>` - and nothing may name `docs/instances.md`, which this repository deliberately does not have."
+    }
+  },
+  "rewrites": {
+    "commands": {
+      "what": "`yarn workspace <package> run <script>` becomes `yarn <script>`",
+      "scripts": [
+        "build",
+        "lint",
+        "test",
+        "example-client",
+        "example-client-anthropic",
+        "example-client-databricks",
+        "example-client-gemini",
+        "example-client-groq",
+        "example-client-litellm",
+        "example-client-mistral",
+        "example-client-ollama",
+        "example-client-openai",
+        "example-client-openrouter",
+        "example-client-typesafe",
+        "example-gateway",
+        "example-gateway-bedrock",
+        "example-gateway-cloudflare",
+        "example-gateway-databricks",
+        "example-gateway-litellm",
+        "example-gateway-openrouter",
+        "example-setup",
+        "example-two-agents"
+      ],
+      "applies": [".claude/**/*.md", "examples/**", "docs/**"]
+    },
+    "absent-documents": {
+      "what": "references to a document `paths.absent` lists are dropped, or pointed at the one that is here",
+      "applies": [".claude/**/*.md", "docs/**"]
+    }
+  }
+}

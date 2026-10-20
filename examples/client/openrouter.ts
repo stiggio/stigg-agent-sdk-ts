@@ -59,7 +59,7 @@ export const openRouterVendor: ChatVendor = {
       apiKey,
       baseURL: baseUrl ?? OPENROUTER_BASE_URL,
       defaultHeaders: {
-        'HTTP-Referer': 'https://github.com/stiggio/stigg-sdk',
+        'HTTP-Referer': 'https://github.com/stiggio/stigg-agent-sdk-ts',
         'X-OpenRouter-Title': 'stigg-agent-sdk-examples',
       },
     }),

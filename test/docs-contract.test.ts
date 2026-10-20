@@ -28,11 +28,12 @@ const code = sources()
   .map((file) => readFileSync(join(SRC, file), 'utf8'))
   .join('\n');
 
-// `docs/instances.md` is held back from the open-source mirror for now, so the list is the
-// documents that are actually here. Declared as a transform in `.sync-manifest.json`.
-const docs = ['README.md', join('docs', 'instances.md'), join('examples', 'README.md')].filter((doc) =>
-  existsSync(join(ROOT, doc)),
-);
+const docs = [
+  'README.md',
+  join('docs', 'guide.md'),
+  join('docs', 'instances.md'),
+  join('examples', 'README.md'),
+].filter((doc) => existsSync(join(ROOT, doc)));
 
 /**
  * Names the lifecycle used to have. A rename leaves these behind in prose that still reads as
@@ -46,7 +47,43 @@ const RETIRED = [
   'RunHandle',
   'RunOptions',
   'StiggGovClient',
+  // The file that held it. A doc naming `core/run-handle.ts` passed this list for months, because
+  // the list spelled the type and the layout section spelled the filename.
+  'run-handle',
 ];
+
+/**
+ * Spellings this package deliberately stopped using.
+ *
+ * Unlike {@link RETIRED}, which names APIs that no longer exist, this one still resolves to
+ * something real - `STIGG_API_KEY` still has a value in somebody's shell - so nothing breaks when
+ * it comes back and no other test has any reason to notice. It was renamed so every Stigg SDK
+ * reads the key under one name; this list is what keeps the old one out.
+ */
+const FORBIDDEN: { text: string; why: string; except?: string[] }[] = [
+  {
+    text: 'STIGG_API_KEY',
+    why: 'the key is read from STIGG_SERVER_API_KEY, the name every Stigg SDK shares',
+    // The one place it belongs: the fallback that keeps an existing `.env` working has to name it.
+    except: [join('examples', 'shared', 'stigg-env.ts')],
+  },
+];
+
+/** Walked rather than listed, so a new example is covered without anyone remembering to add it. */
+const exampleFiles = exampleSources();
+
+/** Everything written for a reader: the documents above, plus what ships beside the examples. */
+const readable = [...docs, '.env.template', join('examples', 'demo.env.template'), ...exampleFiles];
+
+function exampleSources(dir = 'examples'): string[] {
+  return readdirSync(join(ROOT, dir), { withFileTypes: true }).flatMap((entry) =>
+    entry.isDirectory()
+      ? exampleSources(join(dir, entry.name))
+      : entry.name.endsWith('.ts')
+        ? [join(dir, entry.name)]
+        : [],
+  );
+}
 
 /**
  * Written like a member and owned by somebody else: a file on disk, or a vendor's own surface the
@@ -80,6 +117,27 @@ describe('the docs name only APIs that exist', () => {
         .filter((whole, index, all) => all.indexOf(whole) === index);
 
       assert.deepEqual(unknown, [], `named in ${doc} and defined nowhere in src/`);
+    });
+  }
+});
+
+describe('the docs say nothing a reader outside Stigg cannot use', () => {
+  // A count over everything proves nothing here: the fixed documents alone clear any threshold
+  // worth setting, so the walk over `examples/` could return nothing and this would still pass.
+  // The discovered half is the half that can silently vanish, so it is the half that is asserted.
+  it('should find documents to check, so this test is not vacuous', () => {
+    assert.ok(exampleFiles.length > 0, 'no example sources found - the walk over examples/ stopped seeing the tree');
+    assert.ok(docs.length > 0, 'the document list emptied out');
+  });
+
+  for (const { text, why, except = [] } of FORBIDDEN) {
+    it(`no document reintroduces ${text}`, () => {
+      const pattern = new RegExp(`(^|[^\\w-])${text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}($|[^\\w-])`);
+      const offenders = readable
+        .filter((file) => !except.includes(file))
+        .filter((file) => pattern.test(readFileSync(join(ROOT, file), 'utf8')));
+
+      assert.deepEqual(offenders, [], `${text} is back - ${why}`);
     });
   }
 });

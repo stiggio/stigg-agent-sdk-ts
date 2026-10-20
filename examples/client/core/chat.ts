@@ -54,7 +54,7 @@ async function startMocksAndGovernance(apiKey: string | undefined, env: StiggEnv
   // Vendor side: with no key (or with AGENT_SDK_OFFLINE set), fall back to the local mock.
   const vendorMock = await maybeStartMockServer(apiKey);
 
-  // Stigg side: whichever environment STIGG_API_KEY and STIGG_BASE_URL point at.
+  // Stigg side: whichever environment STIGG_SERVER_API_KEY and STIGG_BASE_URL point at.
   const stiggMock = await maybeStartMockStiggServer(env.offline);
   // The account's own setup: the entity types, the parent team, a funded pool. Not the agent -
   // that is this application's to provision, below.

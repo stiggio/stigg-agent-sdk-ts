@@ -16,7 +16,7 @@ export function trackedFiles(...paths: string[]): string[] {
 }
 
 /**
- * The glob subset `.sync-manifest.json` uses: `**` crosses directory boundaries, `*` stops at one,
+ * The glob subset `repo-contract.json` uses: `**` crosses directory boundaries, `*` stops at one,
  * everything else is literal. Deliberately small - a manifest nobody can read by eye is a manifest
  * nobody checks.
  */

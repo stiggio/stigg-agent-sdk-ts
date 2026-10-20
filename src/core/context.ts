@@ -209,6 +209,18 @@ export function resolveContext(
   // names an agent and its entitlement once for every call through the client, so a typo here
   // governs *everything* by the fallback rather than one call.
   assertKnownContext(context, requireCustomer ? 'stiggContext' : "wrap's stiggContext");
+  // A key that deduplicates *one report* cannot be a property of a client. Set at `wrap`, every
+  // call through that client reports under the same key, Stigg dedupes them, and every call after
+  // the first moves no budget at all - silently, because nothing errors and the usage simply
+  // never lands. Refused here rather than ignored, because a caller who passed one meant
+  // something by it.
+  if (!requireCustomer && context.idempotencyKey !== undefined) {
+    throw new Error(
+      "wrap's stiggContext cannot set `idempotencyKey` - it deduplicates a single report, so one " +
+        'key shared by every call through the client would bill the first and discard the rest. ' +
+        'Pass it per call instead, or leave it out and let the vendor request id stand in.',
+    );
+  }
   const customerId = context.customerId?.trim() ?? '';
   if (!customerId && requireCustomer) throw noCustomer();
   // Naming none is legal and means ungated. Naming an empty one is a typo that would meter into
@@ -313,7 +325,24 @@ export function overrideContext(base: ResolvedContext, override: StiggContext): 
   let checkedId = base.checkedId;
 
   if (rebased) {
-    customerId = override.customerId?.trim() || base.customerId;
+    // Absent inherits; present-but-blank throws. `||` used to collapse the two, so a call that
+    // named a customer and got the name wrong - an empty string out of a config, a trimmed-away
+    // id - was billed to the client's default tenant instead. That is someone else's invoice,
+    // and nothing said so. The same mistake on `agentId` has always thrown.
+    if (override.customerId !== undefined) {
+      // `trim()` on its own turns `null` into "Cannot read properties of null" and a number into
+      // "trim is not a function" - the two shapes a JavaScript caller actually passes by accident.
+      // Anything that is not a non-empty string gets the message that says what went wrong.
+      const named = typeof override.customerId === 'string' ? override.customerId.trim() : '';
+      if (!named) {
+        throw new Error(
+          'stiggContext.customerId is empty - a call that names a customer must name one. Leave ' +
+            "the field out to bill the client's own customer; passing an empty value would bill " +
+            'that customer for work the call said belonged to someone else.',
+        );
+      }
+      customerId = named;
+    }
     if (override.entitlement !== undefined) {
       const invalid = entitlementError(override.entitlement);
       if (invalid) throw invalid;

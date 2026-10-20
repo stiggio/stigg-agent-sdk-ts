@@ -1,0 +1,21 @@
+version: 2
+
+# Actions only, deliberately.
+#
+# Every action is pinned to a commit sha in `.github/workflows`, which is what makes a pinned
+# action safe and also what makes it invisible to a human reader: nobody notices that
+# `actions/checkout` is a year behind a sha they cannot read. That is the job this bot does well.
+#
+# The npm manifest is left alone. Its dependency versions are settled where this package is
+# developed and arrive here with the code; a bot raising them here would be proposing a change
+# that cannot be accepted as written, every week, forever.
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: chore
+    groups:
+      actions:
+        patterns: ['*']
