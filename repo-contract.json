@@ -5,7 +5,7 @@
     "path": "."
   },
   "paths": {
-    "copied": ["src/**", "test/**", "testing/**", "tsconfig.build.json"],
+    "copied": ["README.md", "src/**", "test/**", "testing/**", "tsconfig.build.json"],
     "rewritten": [
       "package.json",
       "tsconfig.json",
@@ -27,7 +27,6 @@
       "CHANGELOG.md",
       "CONTRIBUTING.md",
       "LICENSE",
-      "README.md",
       "SECURITY.md",
       "eslint.config.mjs",
       "repo-contract.json",

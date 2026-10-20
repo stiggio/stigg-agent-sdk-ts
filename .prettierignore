@@ -6,6 +6,7 @@ dist/
 # plugin - so this has never been Prettier-formatted, and formatting it here rewrites 1,300 lines
 # for no reason and pushes the churn back on the next sync. It already happened once, when the
 # reference moved out from under this rule. The markdown this repository owns is formatted as usual.
+README.md
 docs/guide.md
 examples/**/*.md
 .claude/
