@@ -43,21 +43,6 @@ Conventional Commits (`feat:`, `fix:`, `docs:`, `refactor:`, `test:`, `chore:`) 
 hook, but the history is read by people, and one line saying what changed is worth more than the
 diff.
 
-## Signing off
-
-Every commit needs a `Signed-off-by` line, which `git commit -s` adds for you:
-
-```
-git commit -s -m "fix: stop the retry loop swallowing the first error"
-```
-
-That line is the [Developer Certificate of Origin](https://developercertificate.org) - a statement
-that you wrote the change, or otherwise have the right to contribute it under this licence. It is
-checked on every pull request. There is no separate agreement to sign, and nothing is sent anywhere.
-
-Forgot it on the last commit: `git commit --amend -s --no-edit`. On several, the quickest fix is
-`git rebase --signoff main`.
-
 ## Licensing
 
 By contributing you agree that your contributions are licensed under the [MIT](LICENSE) licence.
