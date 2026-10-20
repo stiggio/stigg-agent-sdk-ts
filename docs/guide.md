@@ -5,8 +5,8 @@ each example. Start at the [README](../README.md) if you have not already.
 
 A thin SDK that gates and meters agent runs against [Stigg](https://stigg.io), plus runnable
 examples for the two layers it binds to: a client you wrap, and a gateway you call or operate.
-The examples are not part of the published package - they live beside the source in this
-repository, and the paths below are relative to its root.
+The examples are not part of the published package - they live beside the source, and the paths
+below are relative to the package root.
 
 ```bash
 npm install @stigg/agent-sdk-js      # or: yarn add @stigg/agent-sdk-js
@@ -678,6 +678,12 @@ id — stable across _its_ retries, which a local step counter cannot be — rep
 `correlationId:step`. Returning
 a bare `TokenUsage` still works and stays the common case.
 
+**`idempotencyKey` is per call, and only per call.** It deduplicates one report, so a value given
+once at `wrap` would be shared by every call through that client: Stigg would deduplicate them
+down to the first, and every call after it would move no budget at all — silently, because nothing
+errors and the usage simply never lands. `wrap` refuses it for that reason, and the type it
+accepts leaves the field out so the compiler says so first.
+
 ### The engine: SDK first, REST to complete
 
 Two clients, composed per operation, and the SDK tells you which one it picked:
@@ -866,8 +872,8 @@ applies. Both cases are correct — the name belongs to whoever owns the client.
 ## 0. Try it with no setup at all
 
 ```bash
-yarn example-client-anthropic    # or -openai, -gemini, -openrouter, -litellm
-yarn example-gateway             # or example-gateway-litellm
+yarn example-client-anthropic  # or -openai, -gemini, -openrouter, -litellm
+yarn example-gateway  # or example-gateway-litellm
 ```
 
 The full list, with what each one demonstrates, is in [section 6](#6-run-the-examples).
@@ -940,16 +946,13 @@ the examples flag.
 One key and one URL, pointed at whichever environment you mean. The key is environment-bound, so
 it and the URL always move together — there is no separate profile name to keep in sync with them.
 
-| Environment | `STIGG_BASE_URL`                                                |
-| ----------- | --------------------------------------------------------------- |
-| production  | `https://api.stigg.io` (the default when the variable is blank) |
-| staging     | `https://api-staging.stigg.io`                                  |
-| local       | `http://localhost:4000`                                         |
+`STIGG_BASE_URL` defaults to `https://api.stigg.io`. Point it elsewhere only if your account is
+served from elsewhere.
 
 Get a server key for that environment from **app.stigg.io → Integrations → API keys** and put it
-in `STIGG_API_KEY`.
+in `STIGG_SERVER_API_KEY`.
 
-**Leave `STIGG_API_KEY` blank and everything still runs** against a built-in Stigg mock, with no
+**Leave `STIGG_SERVER_API_KEY` blank and everything still runs** against a built-in Stigg mock, with no
 account at all — the same rule the vendor keys follow. `AGENT_SDK_OFFLINE=1` forces the mocks even
 when keys are present, which is what you want when a key is valid but the account has no credits.
 
@@ -958,13 +961,13 @@ Two things adjust themselves to the URL, so you do not configure them twice:
 - The mock answers both transports — REST and `/graphql` — so the engine resolves exactly as it
   does against a real account: governance checks and provisioning over REST, ingest and
   unattributed checks over the Node SDK. The line the SDK prints at startup says which it picked.
-- Against `localhost` the Node SDK's edge cache and realtime socket are switched off, because a
-  local API serves neither and the SDK maps a localhost base to edge port 3060.
+- Against a `localhost` base the Node SDK's edge cache and realtime socket are switched off,
+  because a local API serves neither.
 
 ### Seed the environment
 
 ```bash
-yarn example-setup                    # 5-credit agent budget
+yarn example-setup  # 5-credit agent budget
 yarn example-setup --agent-limit 6    # raise it
 yarn example-setup --no-governance    # seed without entities
 yarn example-setup --archive          # clean up, bottom-up
@@ -1059,7 +1062,7 @@ request it is serving, never from an env file.
 
 Neither file is required **against the mocks**: every fixture default is compiled into the
 examples, so with no files and no keys at all they still run end to end. Those defaults are
-mock-only. Once `STIGG_API_KEY` is set the examples stop inventing ids for an environment they
+mock-only. Once `STIGG_SERVER_API_KEY` is set the examples stop inventing ids for an environment they
 can actually write to — `AGENT_SDK_DEMO_CUSTOMER_ID` becomes required, and the rest degrade to a
 smaller demo (see the fixtures table below).
 
@@ -1097,7 +1100,7 @@ there (or exporting it in your shell) overrides the fixture without editing `dem
 | `AGENT_SDK_DATABRICKS_EXTERNAL`        | unset                                    | `1` asserts the endpoint carries your own upstream key, so that provider invoices it rather than Databricks. An assertion the SDK cannot check — it switches both Databricks examples to `databricks-external.*` |
 | `AGENT_SDK_LITELLM_BASE_URL`           | `http://localhost:4000`                  | Your own proxy — self-hosted, so there is no public default                                                                          |
 | `AGENT_SDK_LITELLM_MODEL`              | `gpt-5`                                  | A model **group** from the proxy's config, not a provider slug                                                                       |
-| `STIGG_API_KEY`                        | —                                        | **Server** key (`server-…`). A publishable `client-…` key fails every call with `IdentityForbidden`. Blank ⇒ the built-in Stigg mock |
+| `STIGG_SERVER_API_KEY`                        | —                                        | **Server** key (`server-…`). A publishable `client-…` key fails every call with `IdentityForbidden`. Blank ⇒ the built-in Stigg mock |
 | `STIGG_BASE_URL`                       | `https://api.stigg.io`                   | Which environment that key belongs to                                                                                                |
 
 ### What the examples gate and meter against — in `examples/demo.env`
@@ -1124,7 +1127,7 @@ Scaffolding, not configuration. Your own application supplies all of this from i
 Each fixture has **three** states, because "no `demo.env` at all" and "I want no agent" are
 different things and an absent variable cannot mean both:
 
-| The variable is…      | Against the mock              | With a real `STIGG_API_KEY`                     |
+| The variable is…      | Against the mock              | With a real `STIGG_SERVER_API_KEY`                     |
 | --------------------- | ----------------------------- | ----------------------------------------------- |
 | **absent**            | the default below             | unset — the demo degrades, or says what it needs |
 | **set**               | that value                    | that value                                      |
@@ -1185,7 +1188,7 @@ An interactive, multi-turn chat, governed end to end, against any of five vendor
 `quit`, an empty line, or press **Ctrl-D** / **Ctrl-C** to end it.
 
 ```bash
-yarn example-client-anthropic     # also: example-client
+yarn example-client-anthropic  # also: example-client
 yarn example-client-openai
 yarn example-client-gemini
 yarn example-client-openrouter
@@ -1337,9 +1340,9 @@ promise, and only you know which one this call is for.
 ## 7. Typecheck, lint and test
 
 ```bash
-yarn build   # typecheck, then emit dist/ - what gets published
+yarn build  # typecheck, then emit dist/ - what gets published
 yarn lint
-yarn test    # node:test via tsx; no network, literal fakes
+yarn test  # node:test via tsx; no network, literal fakes
 ```
 
 `build` is two passes over two configs, and the split is the point. `tsconfig.json` is the
@@ -1348,15 +1351,16 @@ typechecker's view: it covers `src`, `examples`, `test` and `testing`, and emits
 whatever they import, so only `src/` reaches `dist/`. It clears `dist/` first, because a module
 that was renamed or deleted would otherwise sit there and ship.
 
-Either pass resolves `@stigg/node-server-sdk` and `@stigg/typescript` from `node_modules`, as
-published packages like any other - there is no workspace indirection here.
+Either pass resolves workspace dependencies to their built `.d.ts` (see `paths` in
+`tsconfig.json`) rather than to their source, which is compiled with different flags; Nx builds
+them first.
 
 ## 8. Troubleshooting
 
 | Symptom                                     | Cause and fix                                                                                                                                                                                                                                                                                                                                        |
 | ------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `403 GovernanceNotEnabled`                  | The account has no governance. Checks and usage still work; `register()` throws, because there is nowhere to create the agent entity. Contact Stigg to enable it.                                                                                                                                                                                    |
-| `No STIGG_API_KEY`                          | Set it to a server key for the environment in `STIGG_BASE_URL`, or leave it blank to run on the built-in mock.                                                                                                                                                                                                                                       |
+| `No STIGG_SERVER_API_KEY`                          | Set it to a server key for the environment in `STIGG_BASE_URL`, or leave it blank to run on the built-in mock.                                                                                                                                                                                                                                       |
 | `503` and every turn denied                 | The governance cache is unavailable and `checkErrorAction` is `deny`. The default is `allow`, so this is a policy that was asked for; drop it to keep running through the outage, or relax a single call with `stiggContext: { checkErrorAction: 'allow' }`. |
 | `usage value must be a whole number to report against a feature` | `POST /api/v1/usage` takes integers. Report against a **credit currency** instead, which takes fractions, or raise the unit size in your `usageMapper` so the division comes out whole.                                                                                                                                                 |
 | `... is backed by a raw-events meter`       | A `sync` run reported to a feature only a meter can fill. Report that run with `ingest: 'async'` (the default), or point it at a feature whose value your application computes.                                                                                                                                                                      |
@@ -1394,6 +1398,7 @@ src/
               client/providers/ client/gateways/     a model provider, or a gateway you call
               proxy/                                 a gateway you operate: headers in, ingest only
               shared/                                usage shapes and metric tables both halves read
+
 
 testing/      mock-stigg-server.ts                    the Stigg stand-in the examples and the tests share
 

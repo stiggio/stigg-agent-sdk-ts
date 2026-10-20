@@ -1,6 +1,6 @@
 {
   "name": "@stigg/agent-sdk-js",
-  "version": "0.2.0",
+  "version": "0.3.2",
   "private": true,
   "description": "Stigg agent SDK (JS) - run-lifecycle governance for agentic stacks, with examples per layer",
   "license": "MIT",
@@ -71,5 +71,7 @@
     "tsx": "^4.23.13",
     "typescript": "^5.9.3",
     "typescript-eslint": "^8.56.0"
-  }
+  },
+  "homepage": "https://github.com/stiggio/stigg-agent-sdk-ts#readme",
+  "bugs": "https://github.com/stiggio/stigg-agent-sdk-ts/issues"
 }

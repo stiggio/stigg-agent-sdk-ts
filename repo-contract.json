@@ -76,22 +76,22 @@
       "why": "Self-contained: the compiler options the source is written against, inlined, with no workspace paths to redirect. `tools/**` is this repository's own addition."
     },
     ".claude/**": {
-      "rewrite": "commands"
+      "rewrite": "commands; absent-documents"
     },
     "examples/**": {
       "rewrite": "commands"
     },
     "test/docs-contract.test.ts": {
-      "rewrite": "the document list filters for what is present, because `docs/instances.md` is not here",
-      "why": "A missing document would otherwise throw and fail the suite. The filter is a no-op once the document arrives."
+      "rewrite": "the document list filters for what is present, because `docs/instances.md` is not here; and the forbidden-term list keeps only the terms a reader here can act on",
+      "why": "A missing document would otherwise throw and fail the suite. The filter is a no-op once the document arrives. The dropped terms are spellings that only exist where this package is written, and naming them to ban them would be the one place they appear."
     },
     ".env.template": {
       "rewrite": "values stripped; keys only",
       "why": "A template shipping defaults invites someone to keep them. The guide documents each variable and its default, and the examples compile their own."
     },
     "docs/**": {
-      "rewrite": "commands; and the layout section drops the `docs/instances.md` row",
-      "why": "The guide is written in a monorepo, where a script is `yarn workspace <package> run <name>`. Here the package is the repository, so the same line is `yarn <name>` - and the guide must not name `docs/instances.md`, which this repository deliberately does not have."
+      "rewrite": "commands; absent-documents",
+      "why": "The guide is written in a monorepo, where a script is `yarn workspace <package> run <name>`. Here the package is the repository, so the same line is `yarn <name>` - and nothing may name `docs/instances.md`, which this repository deliberately does not have."
     }
   },
   "rewrites": {
@@ -121,7 +121,11 @@
         "example-setup",
         "example-two-agents"
       ],
-      "applies": [".claude/**/*.md", "examples/**"]
+      "applies": [".claude/**/*.md", "examples/**", "docs/**"]
+    },
+    "absent-documents": {
+      "what": "references to a document `paths.absent` lists are dropped, or pointed at the one that is here",
+      "applies": [".claude/**/*.md", "docs/**"]
     }
   }
 }

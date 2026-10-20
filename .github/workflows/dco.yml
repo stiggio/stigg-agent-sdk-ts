@@ -1,0 +1,48 @@
+name: DCO
+
+# Every commit carries a `Signed-off-by` line. See CONTRIBUTING.md - `git commit -s` adds it.
+on:
+  pull_request:
+
+concurrency:
+  group: dco-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  signed-off:
+    name: signed-off
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # The whole range, so every commit in the pull request can be read - not just the tip.
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Check every commit is signed off
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          missing=0
+          # Merge commits carry no sign-off of their own and are excluded with --no-merges.
+          while read -r sha; do
+            [ -z "$sha" ] && continue
+            author="$(git log -1 --format='%an <%ae>' "$sha")"
+            if ! git log -1 --format='%B' "$sha" | grep -qiF "Signed-off-by: $author"; then
+              echo "::error::$(git log -1 --format='%h %s' "$sha") is missing: Signed-off-by: $author"
+              missing=1
+            fi
+          done < <(git rev-list --no-merges "$BASE..$HEAD")
+
+          if [ "$missing" -ne 0 ]; then
+            echo "Add it with 'git commit -s', or 'git rebase --signoff ${BASE}' for a range."
+            exit 1
+          fi
+          echo "every commit is signed off"

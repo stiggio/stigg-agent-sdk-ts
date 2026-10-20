@@ -68,12 +68,12 @@ const fixture = (offline: boolean, variable: string, demo: string): string | und
 function pickCustomerId(offline: boolean): string {
   const customerId = fixture(offline, 'AGENT_SDK_DEMO_CUSTOMER_ID', 'customer-acme');
   // Every other fixture degrades to a smaller demo when it is missing. This one cannot: a guessed
-  // tenant would provision itself into whichever environment STIGG_API_KEY points at.
+  // tenant would provision itself into whichever environment STIGG_SERVER_API_KEY points at.
   if (customerId) return customerId;
   throw new Error(
     'No AGENT_SDK_DEMO_CUSTOMER_ID - every governance call is scoped to a tenant, and the ' +
       'examples will not invent one for a real environment. Set it in examples/demo.env, or ' +
-      'leave STIGG_API_KEY blank to run against the built-in mock.',
+      'set AGENT_SDK_OFFLINE=1 to run against the built-in mock.',
   );
 }
 
@@ -188,7 +188,7 @@ export function describeSetup(env: StiggEnv, demoEnv: DemoEnv): string {
 export function requireFixture<T>(value: T | undefined, variable: string, why: string): T {
   if (value !== undefined) return value;
   throw new Error(
-    `No ${variable} - ${why} Set it in examples/demo.env, or leave STIGG_API_KEY blank to run ` +
+    `No ${variable} - ${why} Set it in examples/demo.env, or set AGENT_SDK_OFFLINE=1 to run ` +
       'against the built-in mock.',
   );
 }

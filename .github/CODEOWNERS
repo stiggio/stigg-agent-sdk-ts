@@ -1,0 +1,7 @@
+# Review is requested automatically from these accounts on every pull request.
+#
+# Advisory, not a gate: the `protect-main` ruleset requires an approval, but not that it comes from
+# an owner. The value here is that a pull request reaches somebody without anyone remembering to
+# forward it - which is the way one sits untouched for a day.
+
+*       @ShaiBet @antonzy

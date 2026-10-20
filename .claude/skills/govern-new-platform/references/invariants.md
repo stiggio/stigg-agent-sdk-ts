@@ -162,8 +162,8 @@ worse, ships a binding nobody can find.
 ## Verifying
 
 ```bash
-yarn test        # contract tests included
-yarn build       # type-checks src, test and examples first
+yarn test  # contract tests included
+yarn build  # type-checks src, test and examples first
 ```
 
 Verify against the real client where you can, not only against a hand-built fixture. The

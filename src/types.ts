@@ -382,8 +382,18 @@ export type ClientOptions = {
   /** Everything this client reports back while it works. See {@link SessionHooks}. */
   hooks?: SessionHooks;
   /** The default context for every call through this client. Any call may override it. */
-  stiggContext?: StiggContext;
+  stiggContext?: ClientContext;
 };
+
+/**
+ * A client's default context: everything in {@link StiggContext} except `idempotencyKey`.
+ *
+ * That one deduplicates a single report, so a value shared by every call through the client would
+ * bill the first and discard the rest. The runtime refuses it either way - a JavaScript caller
+ * reaches `wrap` without passing through this type - but a TypeScript caller should hear it from
+ * the compiler rather than from production.
+ */
+export type ClientContext = Omit<StiggContext, 'idempotencyKey'> & { idempotencyKey?: never };
 
 /**
  * `register` - giving an agent an identity, a budget, and a place in the tree.

@@ -74,7 +74,7 @@ export const openRouterGateway: GatewayVendor<OpenRouter> = {
     new OpenRouter({
       apiKey,
       serverURL: baseUrl,
-      httpReferer: 'https://github.com/stiggio/stigg-sdk',
+      httpReferer: 'https://github.com/stiggio/stigg-agent-sdk-ts',
       appTitle: 'stigg-agent-sdk-examples',
     }),
 

@@ -18,7 +18,7 @@ type Contract = {
   package: { path: string };
   paths: { copied: string[]; rewritten: string[]; ours: string[]; absent: string[] };
   files: Record<string, unknown>;
-  rewrites: Record<string, unknown>;
+  rewrites: Record<string, { applies: string[] }>;
 };
 
 const contract = readJson<Contract>('repo-contract.json');
@@ -50,6 +50,30 @@ describe('tracked paths', () => {
   it('should not track anything it says is absent', () => {
     const present = trackedFiles().filter((file) => matchesAny(file, contract.paths.absent));
     assert.deepEqual(present, [], 'the contract says these do not exist here');
+  });
+
+  // `files` says a path is rewritten; `rewrites[name].applies` says which paths a rewrite reaches.
+  // Two lists describing one thing drift - `docs/**` was declared as rewritten while `applies`
+  // still named only the examples and the extension guide, which would have copied the guide in
+  // verbatim. Compared by first segment, because `applies` may narrow (`.claude/**/*.md`).
+  it('should reach every path it says that rewrite reaches', () => {
+    const head = (pattern: string) => pattern.split('/')[0];
+
+    for (const [name, rewrite] of Object.entries(contract.rewrites)) {
+      const declared = Object.entries(contract.files)
+        .filter(([, spec]) =>
+          String((spec as { rewrite?: string }).rewrite ?? '')
+            .split(';')
+            .some((part) => part.trim() === name),
+        )
+        .map(([path]) => head(path));
+
+      assert.deepEqual(
+        [...new Set(rewrite.applies.map(head))].sort(),
+        [...new Set(declared)].sort(),
+        `\`${name}\` reaches a different set of paths than \`files\` says it does`,
+      );
+    }
   });
 
   // Not tracking the file is half of it. The guide is written where that document exists, so its
