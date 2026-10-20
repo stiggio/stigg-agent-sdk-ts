@@ -7,7 +7,7 @@ actually used **after** it, and let [Stigg](https://stigg.io) handle the pricing
 billing behind it.
 
 [![npm](https://img.shields.io/npm/v/@stigg/agent-sdk-js?color=cb3837&logo=npm)](https://www.npmjs.com/package/@stigg/agent-sdk-js)
-[![license](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
+[![license](https://img.shields.io/badge/license-MIT-blue)](https://github.com/stiggio/stigg-agent-sdk-ts/blob/main/LICENSE)
 
 ```bash
 npm install @stigg/agent-sdk-js      # or: yarn add @stigg/agent-sdk-js
