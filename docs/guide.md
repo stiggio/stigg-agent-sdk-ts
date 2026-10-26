@@ -188,13 +188,22 @@ await client.messages.create({ model, max_tokens: 1024, messages, stiggContext: 
 - **The plan is a request, not a guarantee.** The server picks the first subscription, and a
   predefined free or trial plan can win. When the customer lands anywhere but the plan asked for,
   the SDK warns rather than logging success.
-- **A refusal is final for the process.** An unknown plan or a key that cannot write is reported
-  to `onError` once and not asked again; the check then answers for a customer that does not
-  exist, which is a refusal — `checkErrorAction: 'allow'` does not wave every new customer
-  through a configuration mistake.
-- **An outage is retried.** When Stigg could not be reached to create the customer, the next call
-  tries again, and the check uses `checkErrorAction` only if it then finds no customer. An
-  existing customer gets their real answer either way.
+- **A configuration refusal is final for the process.** An unknown plan, an archived one, or a key
+  that cannot write is reported to `onError` once and not asked again; the check then answers for a
+  customer that does not exist, which is a refusal — `checkErrorAction: 'allow'` does not wave
+  every new customer through a configuration mistake.
+- **Only a passing failure is retried, after a wait.** When Stigg could not be reached, rate-limited
+  the create, timed out or failed unexpectedly, the customer is asked again after 30 seconds - not on
+  every call, which would only press a rate-limited Stigg harder. Until then the check uses
+  `checkErrorAction` if it finds no customer. Every other answer - an unknown plan, a key that cannot
+  write, an invalid id - is final. An existing customer gets their real answer either way.
+- **Use a free plan.** Every customer id the SDK sees becomes a customer on this plan, so a paid
+  plan would start a real paid subscription for each one. And the customer id must come from your
+  server, from the authenticated user - never from a request, or a caller can create customers.
+- **It costs one write per customer per process.** The SDK sends the create without reading
+  first, and Stigg answers an existing customer with a duplicate refusal - so each process makes
+  one extra, refused call for every existing customer it serves, rather than a read before every
+  first call.
 - **`register()` does not provision.** An agent registered under a new customer still needs that
   customer to exist.
 

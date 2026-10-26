@@ -163,6 +163,9 @@ const RETRY_START_AFTER_MS = 2_000;
  */
 const KNOWN_CUSTOMERS_CAP = 10_000;
 
+/** How long a customer whose provisioning failed in passing waits before it is asked again. */
+const PROVISION_RETRY_AFTER_MS = 30_000;
+
 /** The key shorthand and the options object, folded into the one object the config takes. */
 function toOptions(
   first?: string | StiggAgentSDKOptions,
@@ -243,12 +246,18 @@ export class StiggAgentSDK {
    *
    * A refusal is remembered like a success: an unknown plan or a key that cannot write will be
    * refused the same way next time, and retrying it would spend a rate-limited call on every call.
-   * Only an unreachable Stigg is forgotten, so the customer's next call tries again.
+   * A passing failure - unreachable, rate limited - is remembered for
+   * {@link PROVISION_RETRY_AFTER_MS}, then forgotten, so the customer is asked again: soon, but not
+   * on every call while Stigg is the one asking for less.
    *
    * Capped at {@link KNOWN_CUSTOMERS_CAP}, oldest first. Forgetting a customer costs one more
    * provisioning call, which Stigg answers as a duplicate - so the cap bounds memory, not safety.
    */
   private readonly customers = new Map<string, Promise<void>>();
+  /** When a customer whose provisioning failed in passing may be asked again. */
+  private readonly provisionRetryAt = new Map<string, number>();
+  /** Not readonly, so a test can shorten the wait rather than sleep through it. */
+  private provisionRetryAfterMs = PROVISION_RETRY_AFTER_MS;
   private started?: Promise<{ engine: GovernanceEngine; resolution: EngineResolution }>;
   /**
    * When the attempt currently in `started` rejected, or undefined while it is pending or has
@@ -526,6 +535,16 @@ export class StiggAgentSDK {
             'governed by the shared `stiggContext` alone - at the customer level unless that context ' +
             'names an agent. List it to govern it as itself.',
         ),
+      onUncheckedTool: (tool) =>
+        this.config.logger.warn(
+          `[stigg] tool "${tool}" was metered but not checked: it started with no name, so nothing ` +
+            "could match it until its result named it. Add `'*'` to `tools` to check tools like it.",
+        ),
+      onUnnamedTool: (kind) =>
+        this.config.logger.warn(
+          `[stigg] a tool${kind ? ` (${kind})` : ''} ran with no name, outside a model's tool call, so it ` +
+            "could not be checked or priced. If it is a paid tool, add `'*'` to `tools` to govern tools like it.",
+        ),
       missingCustomer:
         options.missingCustomer ??
         'Name one per run, or give the middleware a default in `stiggContext: { customerId }`.',
@@ -627,7 +646,11 @@ export class StiggAgentSDK {
    */
   private provisionCustomer(customerId: string, planId: string): Promise<void> {
     const known = this.customers.get(customerId);
-    if (known) return known;
+    const retryAt = this.provisionRetryAt.get(customerId);
+    // A passing failure answers every call until its wait is over - asked again on each one, a
+    // rate-limited Stigg would only be asked harder.
+    if (known && (retryAt === undefined || Date.now() < retryAt)) return known;
+    this.provisionRetryAt.delete(customerId);
     const pending = this.ensureStarted().then(async ({ engine }) => {
       const outcome = await engine.provisionCustomer?.(customerId, planId);
       if (outcome?.status === 'created') this.describeProvisioned(customerId, planId, outcome);
@@ -648,12 +671,16 @@ export class StiggAgentSDK {
     });
     this.customers.set(customerId, pending);
     if (this.customers.size > KNOWN_CUSTOMERS_CAP) {
-      this.customers.delete(this.customers.keys().next().value!);
+      const oldest = this.customers.keys().next().value!;
+      this.customers.delete(oldest);
+      this.provisionRetryAt.delete(oldest);
     }
     // Only its own entry: one evicted by the cap may have been replaced by a newer attempt for the
-    // same customer by the time it fails, and deleting that one would re-ask a settled customer.
+    // same customer by the time it fails, and timing that one out would re-ask a settled customer.
     pending.catch(() => {
-      if (this.customers.get(customerId) === pending) this.customers.delete(customerId);
+      if (this.customers.get(customerId) === pending) {
+        this.provisionRetryAt.set(customerId, Date.now() + this.provisionRetryAfterMs);
+      }
     });
     return pending;
   }

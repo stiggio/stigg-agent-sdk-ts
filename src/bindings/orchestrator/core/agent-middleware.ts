@@ -17,6 +17,7 @@
  */
 import { AccessDeniedError } from '../../../errors';
 import { isEnforced, noCustomer, overrideContext, type ResolvedContext } from '../../../core/context';
+import { safely } from '../../../core/hooks';
 import type { GovernanceSession } from '../../../core/session';
 import {
   entitlementError,
@@ -67,7 +68,7 @@ export type AgentMiddleware = {
   /** Before a tool runs: checked when the tool is a paid one, raising when refused. */
   startTool(runId: string, tool: ToolStep, attribution: StepAttribution): Promise<void>;
   /** After a tool succeeded: what its `usage` makes of the call, or one unit. Never throws. */
-  endTool(runId: string, output?: unknown): Promise<void>;
+  endTool(runId: string, output?: unknown, name?: string): Promise<void>;
   /** A step that failed: forgotten, and billed nothing - it did not deliver what it charges for. */
   abandon(runId: string): void;
 };
@@ -166,6 +167,13 @@ export type AgentMiddlewareConfig = {
   agents: ReadonlyMap<string, ResolvedAgent>;
   /** Told once per agent that was not listed, so the caller can say so. */
   onUnlisted(agent: string): void;
+  /** Told once per tool whose usage was reported but not checked, because its name came only with its result. */
+  onUncheckedTool(tool: string): void;
+  /**
+   * Told once per kind of tool that ran with no name at all - called directly, so nothing named it
+   * and it could not be priced. Possibly a free tool, so a warning rather than a metering failure.
+   */
+  onUnnamedTool(kind: string | undefined): void;
   /** Where the caller puts the customer - quoted when a step has none. */
   missingCustomer: string;
 };
@@ -178,6 +186,12 @@ type Step = {
   tool?: { name: string; input: unknown; usage?: ToolUsageMapper; callId?: string };
 };
 
+/**
+ * A tool that started with no name no entry could match - a packaged tool whose call was issued on
+ * another process, or before a resume. Held until it ends, when its result names it.
+ */
+type UnnamedTool = { owner: StepAttribution; context: ResolvedContext; input: unknown; callId?: string; kind?: string };
+
 /** A tool call a model issued: the tool it named, and the agent whose model asked for it. */
 type IssuedCall = { name: string; agent?: string };
 
@@ -188,6 +202,14 @@ type IssuedCall = { name: string; agent?: string };
  */
 const ISSUED_CALLS_LIMIT = 1_000;
 const STEPS_LIMIT = 10_000;
+
+/**
+ * What deduplicates a tool step's report: the call id the model issued, plus what it reports
+ * against - one tool call is one report, and two entitlements on one call must not collide.
+ */
+function toolKey(callId: string | undefined, context: ResolvedContext, name: string): string | undefined {
+  return callId ? `${callId}:${context.checkedId ?? name}` : undefined;
+}
 
 /** Adds to a map that drops its oldest entry past `limit`, and hands back what it dropped. */
 function remember<V>(map: Map<string, V>, key: string, value: V, limit: number): V | undefined {
@@ -203,6 +225,10 @@ export function createAgentMiddleware(session: GovernanceSession, config: AgentM
   const steps = new Map<string, Step>();
   /** The tool calls models issued, by call id - kept for re-runs, until the cap drops them. */
   const issuedCalls = new Map<string, IssuedCall>();
+  /** Tools that started without a name, by run id - until they end. */
+  const unnamedTools = new Map<string, UnnamedTool>();
+  const warnedUnchecked = new Set<string>();
+  const warnedUnnamed = new Set<string>();
   const warnedUnlisted = new Set<string>();
 
   /**
@@ -211,9 +237,16 @@ export function createAgentMiddleware(session: GovernanceSession, config: AgentM
    */
   const agentFor = (agent: string | undefined): ResolvedAgent => {
     const own = agent === undefined ? undefined : config.agents.get(agent);
-    if (!own && agent !== undefined && config.agents.size > 0 && !warnedUnlisted.has(agent)) {
+    // Capped: the names come from the caller's own runs, so an unbounded set is theirs to grow.
+    if (
+      !own &&
+      agent !== undefined &&
+      config.agents.size > 0 &&
+      !warnedUnlisted.has(agent) &&
+      warnedUnlisted.size < 100
+    ) {
       warnedUnlisted.add(agent);
-      config.onUnlisted(agent);
+      warn(() => config.onUnlisted(agent));
     }
     return own ?? config.shared;
   };
@@ -235,13 +268,23 @@ export function createAgentMiddleware(session: GovernanceSession, config: AgentM
   /** A step in flight. One dropped to make room is never billed, so that is said, not silent. */
   const rememberStep = (runId: string, step: Step): void => {
     const dropped = remember(steps, runId, step, STEPS_LIMIT);
-    if (dropped) {
-      session.failedToMeasure(
-        dropped.context,
-        new Error(`a step was still in flight after ${STEPS_LIMIT} newer ones started, so it was dropped unbilled`),
-      );
-    }
+    if (dropped) reportDropped(dropped.context, 'a step');
   };
+
+  /** An unnamed tool held until its result names it - and said, if it is dropped to make room. */
+  const rememberUnnamed = (runId: string, tool: UnnamedTool): void => {
+    const dropped = remember(unnamedTools, runId, tool, STEPS_LIMIT);
+    if (dropped) reportDropped(dropped.context, 'a tool with no name');
+  };
+
+  const reportDropped = (context: ResolvedContext, what: string): void =>
+    session.failedToMeasure(
+      context,
+      new Error(`${what} was still in flight after ${STEPS_LIMIT} newer ones started, so it was dropped unreported`),
+    );
+
+  /** The application's warnings are its own code: one that throws must not fail a step. */
+  const warn = (say: () => void): void => safely(say, () => undefined);
 
   /** The tool calls a reply asked for, kept until each tool has run. */
   const rememberIssuedCalls = (issued: readonly IssuedToolCall[], agent: string | undefined): void => {
@@ -258,8 +301,8 @@ export function createAgentMiddleware(session: GovernanceSession, config: AgentM
     return { ...contextFor(priced, attribution), tool: name };
   };
 
-  /** Bills a tool step that ended: its `usage`, or one unit. A bad `usage` is a metering failure. */
-  const billTool = async ({ context, idempotencyKey, tool }: Step, output: unknown): Promise<void> => {
+  /** Reports what a tool step that ended used: its `usage`, or one unit. A bad `usage` is a metering failure. */
+  const ingestTool = async ({ context, idempotencyKey, tool }: Step, output: unknown): Promise<void> => {
     const options = { idempotencyKey };
     if (!tool?.usage) {
       await session.ingest(context, 1, options);
@@ -274,6 +317,39 @@ export function createAgentMiddleware(session: GovernanceSession, config: AgentM
     } catch (err) {
       session.failedToMeasure(context, err);
     }
+  };
+
+  /**
+   * The step an unnamed tool would have started, now that its result names it - or nothing to
+   * report, when it has no name or the name is not governed. It ran unchecked, which is said once
+   * per tool: only `'*'` can gate a tool whose name is not known when it starts.
+   */
+  const stepFromResult = (runId: string, name: string | undefined): Step | undefined => {
+    const unnamed = unnamedTools.get(runId);
+    if (!unnamed) return undefined;
+    if (name === undefined) {
+      // Called directly - no tool call, no ToolMessage - so nothing ever named it. It may well be a
+      // free tool, so this is said once per kind of tool rather than raised as a metering failure.
+      const kind = unnamed.kind ?? '(unknown)';
+      if (!warnedUnnamed.has(kind) && warnedUnnamed.size < 100) {
+        warnedUnnamed.add(kind);
+        warn(() => config.onUnnamedTool(unnamed.kind));
+      }
+      return undefined;
+    }
+    const agent = agentFor(unnamed.owner.agent);
+    const tool = toolFor(agent.tools, name);
+    if (!tool) return undefined;
+    if (tool.entitlement && !warnedUnchecked.has(name)) {
+      warnedUnchecked.add(name);
+      warn(() => config.onUncheckedTool(name));
+    }
+    const context = toolContext(agent, tool, name, unnamed.owner);
+    return {
+      context,
+      tool: { name, input: unnamed.input, usage: tool.usage, callId: unnamed.callId },
+      idempotencyKey: toolKey(unnamed.callId, context, name),
+    };
   };
 
   return {
@@ -308,25 +384,35 @@ export function createAgentMiddleware(session: GovernanceSession, config: AgentM
       const owner = { ...attribution, agent: issued?.agent ?? attribution.agent };
       const agent = agentFor(owner.agent);
       const tool = toolName ? toolFor(agent.tools, named) : undefined;
-      if (!toolName || !tool) return;
+      if (!toolName || !tool) {
+        // Nothing to check it against yet - but its result will name it, and a priced tool must
+        // not run free because its name was not known when it started.
+        // Only when a name could match - and with its context resolved now, so a run with no
+        // customer is refused before the tool runs, as a named tool is.
+        if (named === undefined && Object.values(agent.tools).some(Boolean)) {
+          rememberUnnamed(runId, { owner, context: contextFor(agent.context, owner), input, callId, kind });
+        }
+        return;
+      }
       const context = toolContext(agent, tool, toolName, owner);
       if (tool.entitlement) await check(context);
       rememberStep(runId, {
         context,
         tool: { name: toolName, input, usage: tool.usage, callId },
-        // One tool call is one report, and two entitlements on one call must not collide.
-        idempotencyKey: callId ? `${callId}:${context.checkedId ?? toolName}` : undefined,
+        idempotencyKey: toolKey(callId, context, toolName),
       });
     },
 
-    async endTool(runId, output) {
-      const step = steps.get(runId);
-      if (!step) return;
+    async endTool(runId, output, name) {
+      // Started governed, or started unnamed and governed by the name its result carries.
+      const step = steps.get(runId) ?? stepFromResult(runId, name);
       steps.delete(runId);
-      await billTool(step, output);
+      unnamedTools.delete(runId);
+      if (step) await ingestTool(step, output);
     },
 
     abandon(runId) {
+      unnamedTools.delete(runId);
       steps.delete(runId);
     },
   };

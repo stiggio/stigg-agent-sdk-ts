@@ -10,6 +10,15 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { noopLogger } from '../src/logger';
 import { context, newStigg } from './stigg-harness';
+import type { StiggAgentSDK } from '../src/stigg-agent-sdk';
+
+/** Moves a failed customer's next attempt to now, rather than sleeping through the wait. */
+const retryAt = (stigg: StiggAgentSDK, afterMs: number) => {
+  (stigg as unknown as { provisionRetryAfterMs: number }).provisionRetryAfterMs = afterMs;
+  for (const key of (stigg as unknown as { provisionRetryAt: Map<string, number> }).provisionRetryAt.keys()) {
+    (stigg as unknown as { provisionRetryAt: Map<string, number> }).provisionRetryAt.set(key, Date.now() + afterMs);
+  }
+};
 
 const plan = 'plan-free';
 const newCustomer = { ...context, customerId: 'customer-new', defaultPlanId: plan };
@@ -70,6 +79,48 @@ describe('a default plan provisions the customers Stigg does not know', () => {
 });
 
 describe('a provisioning that fails', () => {
+  // Every code Stigg answers is final except the few that say nothing about the customer. One
+  // missing from either list would be a regression the reviewer found by hand: a key that cannot
+  // write, retried on every call while the error policy let each call through.
+  for (const code of [
+    'PlanNotFound',
+    'EntityIsArchivedError',
+    'AccessDeniedError',
+    'BadUserInput',
+    'IdentityForbidden',
+  ]) {
+    it(`remembers ${code} as final - asked once, and every check refused`, async () => {
+      const { stigg, mock } = await newStigg();
+      mock.failProvisioning = { code };
+      mock.strictCustomers = true;
+      const decisions = [];
+      for (let i = 0; i < 3; i++) decisions.push(await stigg.check({ ...newCustomer, checkErrorAction: 'allow' }));
+      assert.deepEqual(mock.state.provisionAttempts, ['customer-new']);
+      assert.ok(decisions.every((decision) => !decision.hasAccess));
+    });
+  }
+
+  for (const code of [
+    'RateLimitExceeded',
+    'OperationTimeout',
+    'UnexpectedError',
+    'ObjectAlreadyBeingUsedByAnotherRequestError',
+  ]) {
+    it(`retries ${code} once its wait is over - and not before`, async () => {
+      const { stigg, mock } = await newStigg();
+      mock.failProvisioning = { code };
+      mock.strictCustomers = true;
+      for (let i = 0; i < 5; i++) await stigg.check(newCustomer);
+      assert.deepEqual(mock.state.provisionAttempts, ['customer-new'], 'one attempt while Stigg is failing');
+
+      retryAt(stigg, 0);
+      mock.failProvisioning = false;
+      await stigg.check(newCustomer);
+      await stigg.check(newCustomer);
+      assert.deepEqual(mock.state.subscriptionWrites, [{ customerId: 'customer-new', planId: plan }]);
+    });
+  }
+
   // Stigg answered, and will answer the same way next time - so it is asked once, reported once,
   // and the check answers for the customer that does not exist. An `allow` policy exists for
   // outages; waving every new customer through on a typo'd plan id is not what it is for.
@@ -105,8 +156,31 @@ describe('a provisioning that fails', () => {
     assert.equal(decision.hasAccess, true, 'the real answer, not the deny policy');
   });
 
+  // The review case: a rate limit arrives as a GraphQL error code, just like a refusal. Remembered
+  // as one, it would deny every check for that customer until the process restarted.
+  it('is retried, not remembered as a refusal, when Stigg rate-limits it', async () => {
+    const errors: unknown[] = [];
+    const { stigg, mock } = await newStigg({ onError: (error) => errors.push(error) });
+    retryAt(stigg, 0);
+    mock.failProvisioning = 'rate-limited';
+    mock.strictCustomers = true;
+    const limited = await stigg.check({ ...newCustomer, checkErrorAction: 'allow' });
+    assert.equal(limited.hasAccess, true, 'a passing failure is the error policy, not a verdict');
+    assert.equal(
+      errors.filter((error) => String(error).includes('will not be asked again')).length,
+      0,
+      'not reported as a final refusal',
+    );
+
+    mock.failProvisioning = false;
+    await stigg.check(newCustomer);
+    assert.deepEqual(mock.state.subscriptionWrites, [{ customerId: 'customer-new', planId: plan }]);
+    assert.equal(mock.state.provisionAttempts.filter((id) => id === 'customer-new').length >= 2, true, 'asked again');
+  });
+
   it('is retried by the next call when Stigg was unreachable', async () => {
     const { stigg, mock } = await newStigg();
+    retryAt(stigg, 0);
     mock.failProvisioning = 'unreachable';
     mock.strictCustomers = true;
     await stigg.check(newCustomer);

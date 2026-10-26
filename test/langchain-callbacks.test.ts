@@ -12,8 +12,9 @@ import { ChatAnthropic } from '@langchain/anthropic';
 import { BaseCallbackHandler } from '@langchain/core/callbacks/base';
 import { ToolMessage } from '@langchain/core/messages';
 import { createAgent, tool } from 'langchain';
+import { FakeListChatModel } from '@langchain/core/utils/testing';
 import { END, MessagesAnnotation, START, StateGraph } from '@langchain/langgraph';
-import { ToolNode, toolsCondition } from '@langchain/langgraph/prebuilt';
+import { ToolNode, createReactAgent, toolsCondition } from '@langchain/langgraph/prebuilt';
 import { z } from 'zod';
 import {
   unitsPerTokens,
@@ -23,6 +24,7 @@ import {
   type ToolCallMeasurement,
 } from '../src';
 import { AccessDeniedError, StiggLangChainCallbackHandler, isAccessDenied } from '../src/integrations/langchain';
+import { noopLogger } from '../src/logger';
 import { newStigg } from './stigg-harness';
 import { seedBudget } from '../testing/mock-stigg-server';
 import { startMockServer } from '../examples/shared/mock-server';
@@ -30,11 +32,28 @@ import { startMockServer } from '../examples/shared/mock-server';
 const CUSTOMER = 'customer-acme';
 const credits = { currencyId: 'credits' } as const;
 
-/** What LangChain hands `handleChatModelStart`, up to the metadata - the only argument read. */
+/** The run of the `lead` agent - what a step is attributed by: the configured agent above it. */
+const LEAD_RUN = 'lead-run';
+
+/** What LangChain hands `handleChatModelStart`, up to the metadata: the parent run and the metadata are read. */
 const modelStart = (
   runId: string,
   metadata: Record<string, unknown>,
-): Parameters<StiggLangChainCallbackHandler['handleChatModelStart']> => [{}, [[]], runId, undefined, {}, [], metadata];
+  // `null` for a step with no agent run above it: `undefined` would take the default.
+  parentRunId: string | null = LEAD_RUN,
+): Parameters<StiggLangChainCallbackHandler['handleChatModelStart']> => [
+  {},
+  [[]],
+  runId,
+  parentRunId ?? undefined,
+  {},
+  [],
+  metadata,
+];
+
+/** Opens a run named `name`, as LangChain reports an agent's run: parent fourth, name eighth. */
+const openRun = (handler: StiggLangChainCallbackHandler, runId: string, name: string, parentRunId?: string) =>
+  (handler.handleChainStart as (...args: unknown[]) => void)({}, {}, runId, parentRunId, [], {}, 'chain', name);
 
 /** What LangChain hands `handleLLMEnd` for one chat generation. */
 const llmResult = (id: string, input = 900, output = 100) => ({
@@ -75,6 +94,7 @@ async function governed(options: { agentBudget?: number; checkErrorAction?: 'all
     },
     agents: { lead: { stiggContext: { agentId: 'agent-1' }, tools: { web_search: credits } } },
   });
+  openRun(handler, LEAD_RUN, 'lead');
   return { stigg, mock, handler, ingests, decisions, warnings };
 }
 
@@ -160,7 +180,7 @@ describe('StiggLangChainCallbackHandler', () => {
 
     // `lead` has nothing left; `researcher` is not listed, so it is checked against the
     // customer's pool - resolving proves it was not checked as `lead`.
-    await handler.handleChatModelStart(...modelStart('run-1', { ...lead, lc_agent_name: 'researcher' }));
+    await handler.handleChatModelStart(...modelStart('run-1', { ...lead, lc_agent_name: 'researcher' }, null));
 
     assert.equal(decisions[0]!.context.agent, 'researcher');
     assert.equal(decisions[0]!.context.dimensions.agentId, undefined, 'billed to the customer, not to an agent');
@@ -170,8 +190,8 @@ describe('StiggLangChainCallbackHandler', () => {
     const { handler, warnings } = await governed();
     const unlisted = { ...lead, lc_agent_name: 'researcher' };
 
-    await handler.handleChatModelStart(...modelStart('run-1', unlisted));
-    await handler.handleChatModelStart(...modelStart('run-2', unlisted));
+    await handler.handleChatModelStart(...modelStart('run-1', unlisted, null));
+    await handler.handleChatModelStart(...modelStart('run-2', unlisted, null));
 
     assert.equal(warnings.filter((w) => w.includes('"researcher" is not listed')).length, 1);
   });
@@ -206,7 +226,7 @@ describe('StiggLangChainCallbackHandler', () => {
   it("gates an agent's paid tool, reports one unit for it, and lets every other tool through", async () => {
     const { stigg, handler, ingests, decisions } = await governed();
     const toolStart = (name: string, runId: string) =>
-      handler.handleToolStart({}, '{}', runId, undefined, [], lead, name, `call_${runId}`);
+      handler.handleToolStart({}, '{}', runId, LEAD_RUN, [], lead, name, `call_${runId}`);
 
     await toolStart('web_search', 't1');
     await handler.handleToolEnd('result', 't1');
@@ -257,7 +277,7 @@ describe('StiggLangChainCallbackHandler', () => {
   it('refuses a paid tool the agent cannot afford', async () => {
     const { handler } = await governed({ agentBudget: 0 });
     await assert.rejects(
-      handler.handleToolStart({}, '{}', 't1', undefined, [], lead, 'web_search', 'call_t1'),
+      handler.handleToolStart({}, '{}', 't1', LEAD_RUN, [], lead, 'web_search', 'call_t1'),
       (err) => isAccessDenied(err)?.hasAccess === false,
     );
   });
@@ -320,7 +340,7 @@ describe('StiggLangChainCallbackHandler', () => {
       tools: { web_search: { entitlement: credits, usage: (call) => (seen.push(call), { credits: 1 }) } },
     });
 
-    await handler.handleToolStart({}, '{"query":"stigg"}', 't1', undefined, [], lead, 'web_search', 'call_1');
+    await handler.handleToolStart({}, '{"query":"stigg"}', 't1', LEAD_RUN, [], lead, 'web_search', 'call_1');
     await handler.handleToolEnd(
       new ToolMessage({ content: '{"results":[1,2,3]}', tool_call_id: 'call_1', name: 'web_search' }),
       't1',
@@ -341,7 +361,7 @@ describe('StiggLangChainCallbackHandler', () => {
 
     // No runName, no tool call id: only the serialized class.
     const tavily = { lc: 1, type: 'not_implemented', id: ['langchain', 'tools', 'TavilySearch'] };
-    await handler.handleToolStart(tavily, '{}', 't1', undefined, [], lead);
+    await handler.handleToolStart(tavily, '{}', 't1', LEAD_RUN, [], lead);
 
     assert.deepEqual(checked, ['TavilySearch']);
   });
@@ -352,12 +372,221 @@ describe('StiggLangChainCallbackHandler', () => {
     await handler.handleChatModelStart(...modelStart('run-1', lead));
     handler.handleLLMError(new Error('overloaded'), 'run-1');
     await handler.handleLLMEnd(llmResult('msg_1'), 'run-1');
-    await handler.handleToolStart({}, '{}', 't1', undefined, [], lead, 'web_search', 'call_t1');
+    await handler.handleToolStart({}, '{}', 't1', LEAD_RUN, [], lead, 'web_search', 'call_t1');
     handler.handleToolError(new Error('timeout'), 't1');
     await handler.handleToolEnd('late', 't1');
     await stigg.flush();
 
     assert.equal(ingests.length, 0);
+  });
+});
+
+describe('which agent a step belongs to: the run tree, not metadata', () => {
+  /** A handler for `lead`, `researcher` and `billing_bot`, recording which agent each check was for. */
+  async function attributed(rootAgent?: string) {
+    const warnings: string[] = [];
+    const { stigg } = await newStigg({
+      agentBudget: 100,
+      logger: { ...noopLogger, warn: (message: string) => warnings.push(message) },
+    });
+    const agents: (string | undefined)[] = [];
+    const handler = new StiggLangChainCallbackHandler({
+      stigg,
+      stiggContext: { customerId: CUSTOMER, entitlement: credits },
+      agents: { lead: {}, researcher: {}, billing_bot: {} },
+      rootAgent,
+      hooks: { onDecision: (_decision, context) => agents.push(context.agent) },
+    });
+    return { handler, agents, warnings };
+  }
+  const model = () => new FakeListChatModel({ responses: ['done'] });
+  const ask = { messages: [{ role: 'user' as const, content: 'x' }] };
+
+  it("bills a named sub-agent as itself when the tool that runs it passes on the parent's config", async () => {
+    const { handler, agents } = await attributed();
+    const researcher = createAgent({ name: 'researcher', model: model(), tools: [] });
+    const research = tool(async (_input, config) => (await researcher.invoke(ask, config)).messages.at(-1)!.text, {
+      name: 'research',
+      schema: z.object({}),
+    });
+
+    // The parent's config carries `lc_agent_name: 'lead'` - which metadata alone would bill.
+    await research.invoke({}, { callbacks: [handler], metadata: { lc_agent_name: 'lead' } });
+
+    assert.deepEqual(agents, ['researcher']);
+  });
+
+  it('ignores an agent name a caller puts in the metadata - it cannot choose whose budget pays', async () => {
+    const { handler, agents } = await attributed();
+    const researcher = createAgent({ name: 'researcher', model: model(), tools: [] });
+
+    await researcher.invoke(ask, { callbacks: [handler], metadata: { lc_agent_name: 'lead' } });
+
+    assert.deepEqual(agents, ['researcher']);
+  });
+
+  it('knows a createReactAgent by its name, though it stamps none in metadata', async () => {
+    const { handler, agents } = await attributed();
+
+    await createReactAgent({ llm: model(), tools: [], name: 'billing_bot' }).invoke(ask, { callbacks: [handler] });
+
+    assert.deepEqual(agents, ['billing_bot']);
+  });
+  it('keeps a top-level agent as itself with `rootAgent`, whatever the caller names the run', async () => {
+    const { handler, agents } = await attributed('lead');
+    const lead = createAgent({ name: 'lead', model: new FakeListChatModel({ responses: ['done'] }), tools: [] });
+
+    for (const runName of ['researcher', 'anything-else']) {
+      await lead.invoke({ messages: [{ role: 'user', content: 'x' }] }, { callbacks: [handler], runName });
+    }
+
+    assert.deepEqual(agents, ['lead', 'lead']);
+  });
+
+  it('refuses a `rootAgent` that `agents` does not list', async () => {
+    const { stigg } = await newStigg();
+    assert.throws(
+      () => new StiggLangChainCallbackHandler({ stigg, agents: { lead: {} }, rootAgent: 'writer' }),
+      /`rootAgent` names "writer"/,
+    );
+  });
+});
+
+describe('what decides the agent, and what cannot', () => {
+  it("never takes a configured agent's name from metadata alone - and says so", async () => {
+    const { handler, decisions, warnings } = await governed();
+
+    // `lead` is configured, but no run above this step is named `lead`: metadata is not proof.
+    await handler.handleChatModelStart(...modelStart('run-1', lead, null));
+
+    assert.equal(decisions[0]!.context.agent, undefined, 'governed by the shared context');
+    assert.equal(warnings.filter((w) => w.includes('names agent "lead", but no run above it')).length, 1);
+  });
+
+  it("attributes a nested run a copy handles through the original's run tree", async () => {
+    const { handler, decisions } = await governed();
+    const copy = handler.copy() as StiggLangChainCallbackHandler;
+
+    // The agent's run started on the original; the model call inside it reaches the copy.
+    await copy.handleChatModelStart(...modelStart('run-1', { stiggCustomerId: CUSTOMER }));
+
+    assert.equal(decisions[0]!.context.agent, 'lead');
+  });
+});
+
+describe('what a step is billed from', () => {
+  it('treats an empty tokenUsage - a streamed completion - as no measurement, not as zero', async () => {
+    const errors: unknown[] = [];
+    const { stigg } = await newStigg({ onError: (err) => errors.push(err) });
+    const ingests: IngestResult[] = [];
+    const handler = new StiggLangChainCallbackHandler({
+      stigg,
+      stiggContext: { customerId: CUSTOMER, ingestMode: 'sync' },
+      hooks: { onIngest: (result) => ingests.push(result) },
+    });
+
+    await handler.handleLLMStart({}, ['prompt'], 'run-8', undefined, {}, [], {});
+    await handler.handleLLMEnd({ generations: [[{ text: 'answer' }]], llmOutput: { tokenUsage: {} } }, 'run-8');
+    await stigg.flush();
+
+    assert.equal(ingests.length, 0);
+    assert.match(String(errors[0]), /without usage/);
+  });
+
+  it("reports a completion model's tokens under the chat model's names, keyed by its run", async () => {
+    const { stigg } = await newStigg({ agentBudget: 100 });
+    const ingests: IngestResult[] = [];
+    // No mapper: what is reported is the counters themselves, so a wrong mapping shows.
+    const handler = new StiggLangChainCallbackHandler({
+      stigg,
+      stiggContext: { customerId: CUSTOMER, ingestMode: 'sync' },
+      hooks: { onIngest: (result) => ingests.push(result) },
+    });
+
+    await handler.handleLLMStart({}, ['prompt'], 'run-7', undefined, {}, [], {});
+    await handler.handleLLMEnd(
+      {
+        generations: [[{ text: 'answer' }]],
+        llmOutput: { tokenUsage: { promptTokens: 900, completionTokens: 100, totalTokens: 1000 } },
+      },
+      'run-7',
+    );
+    await stigg.flush();
+
+    assert.deepEqual(ingests[0]?.reported, { input_tokens: 900, output_tokens: 100, total_tokens: 1000 });
+    assert.equal(ingests[0]?.idempotencyKey, 'run-7');
+  });
+
+  it('bills a completion model from its llmOutput.tokenUsage, since it has no chat message', async () => {
+    const { stigg, handler, ingests } = await governed();
+
+    await handler.handleLLMStart({}, ['prompt'], 'run-1', LEAD_RUN, {}, [], lead);
+    await handler.handleLLMEnd(
+      {
+        generations: [[{ text: 'answer' }]],
+        llmOutput: { tokenUsage: { promptTokens: 900, completionTokens: 100, totalTokens: 1000 } },
+      },
+      'run-1',
+    );
+    await stigg.flush();
+
+    assert.deepEqual(ingests[0]?.result.reported, { credits: 1 });
+  });
+
+  it('reports a priced tool that started with no name by the name its result carries, and says it ran unchecked', async () => {
+    const { stigg, handler, ingests, decisions, warnings } = await governed();
+    const tavily = { lc: 1, type: 'not_implemented', id: ['langchain', 'tools', 'TavilySearch'] };
+
+    // No name, and a call id no model on this process issued - a resumed run, another pod.
+    await handler.handleToolStart(tavily, '{}', 't1', LEAD_RUN, [], lead, undefined, 'call_elsewhere');
+    await handler.handleToolEnd(
+      new ToolMessage({ content: 'found', tool_call_id: 'call_elsewhere', name: 'web_search' }),
+      't1',
+    );
+    await stigg.flush();
+
+    assert.equal(decisions.length, 0, 'nothing could be checked before it ran');
+    assert.equal(ingests[0]?.result.idempotencyKey, 'call_elsewhere:credits');
+    assert.equal(warnings.filter((w) => w.includes('"web_search" was metered but not checked')).length, 1);
+  });
+});
+
+describe("the application's own code, called from inside a step", () => {
+  it('reports a tool that worked even when the logger throws on its warning', async () => {
+    const { stigg } = await newStigg({
+      agentBudget: 100,
+      logger: {
+        ...noopLogger,
+        warn: () => {
+          throw new Error('logger down');
+        },
+      },
+    });
+    const ingests: IngestResult[] = [];
+    const handler = new StiggLangChainCallbackHandler({
+      stigg,
+      stiggContext: { customerId: CUSTOMER, entitlement: credits, ingestMode: 'sync' },
+      tools: { web_search: credits },
+      hooks: { onIngest: (result) => ingests.push(result) },
+    });
+    const tavily = { lc: 1, type: 'not_implemented', id: ['langchain', 'tools', 'TavilySearch'] };
+
+    await handler.handleToolStart(tavily, '{}', 't1', undefined, [], {}, undefined, 'call_1');
+    await handler.handleToolEnd(
+      new ToolMessage({ content: 'found', tool_call_id: 'call_1', name: 'web_search' }),
+      't1',
+    );
+    await stigg.flush();
+
+    assert.equal(ingests.length, 1);
+  });
+
+  it('says once that the run tree is full, since steps beneath a forgotten run lose their agent', async () => {
+    const { handler, warnings } = await governed();
+
+    for (let n = 0; n <= 10_001; n += 1) openRun(handler, `run-${n}`, 'node');
+
+    assert.equal(warnings.filter((w) => w.includes('LangChain runs are open at once')).length, 1);
   });
 });
 

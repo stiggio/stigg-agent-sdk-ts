@@ -88,6 +88,21 @@ export type NodeSdkEngineOptions = {
  */
 const errorCode = (err: unknown): string | undefined => (err as { errorCode?: string })?.errorCode;
 
+/**
+ * The failures that say nothing about the customer - a rate limit, a timeout, an unexpected error -
+ * so asking again later may succeed. Every other code Stigg answers with is a final answer about
+ * this customer or this configuration - an unknown plan, a key that cannot write, an invalid id -
+ * and asking again gets the same one.
+ */
+const PASSING_FAILURES = new Set([
+  'RateLimitExceeded',
+  'OperationTimeout',
+  'UnexpectedError',
+  'RequestTimeout',
+  // A lock another request holds on the customer - creating one takes it.
+  'ObjectAlreadyBeingUsedByAnotherRequestError',
+]);
+
 const LOCAL_HOSTS = new Set(['localhost', '127.0.0.1', '::1', '[::1]']);
 
 /**
@@ -188,9 +203,10 @@ export class NodeSdkEngine implements GovernanceEngine {
    * mutation, and writes the entitlements it answers with straight into the cache - so the check
    * that follows reads the new plan locally instead of fetching it.
    *
-   * Throws only when Stigg did not answer. Any answer - created, duplicate, or refused - resolves,
-   * because the caller treats them differently: a refusal will be the same next time, and an
-   * unreachable server may not.
+   * Resolves with a final answer - created, duplicate, or a refusal that will be the same next
+   * time. Throws for a passing failure - unreachable, rate limited, timed out - so the customer is
+   * asked again later: remembering one as a refusal would deny that customer until the process
+   * restarts.
    */
   async provisionCustomer(customerId: string, planId: string): Promise<ProvisionOutcome> {
     try {
@@ -203,7 +219,7 @@ export class NodeSdkEngine implements GovernanceEngine {
     } catch (err) {
       const code = errorCode(err);
       if (code === 'DuplicatedEntityNotAllowed') return { status: 'existing' };
-      if (code && code !== 'RequestTimeout') {
+      if (code && !PASSING_FAILURES.has(code)) {
         return { status: 'rejected', code, reason: err instanceof Error ? err.message : String(err) };
       }
       throw asEngineError('provisionCustomer', err);

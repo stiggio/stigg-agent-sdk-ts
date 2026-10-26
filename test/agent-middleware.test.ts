@@ -6,6 +6,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import type { IngestResult, MiddlewareTools } from '../src';
+import { noopLogger } from '../src/logger';
 import { newStigg } from './stigg-harness';
 
 const CUSTOMER = 'customer-acme';
@@ -195,7 +196,7 @@ describe('the tool calls a model issued', () => {
 });
 
 describe('the steps in flight', () => {
-  it('says so when a step is dropped to make room, rather than leave it unbilled in silence', async () => {
+  it('says so when a step is dropped to make room, rather than leave it unreported in silence', async () => {
     const { middleware, flushed } = await graph();
 
     // Ten thousand and one model calls started and never ended: the oldest makes room.
@@ -204,7 +205,62 @@ describe('the steps in flight', () => {
 
     const { ingests, errors } = await flushed();
     assert.equal(ingests.length, 0, 'the dropped step bills nothing on its late end');
-    assert.match(String(errors[0]), /dropped unbilled/);
+    assert.match(String(errors[0]), /a step was still in flight.*dropped unreported/);
+  });
+});
+
+describe('a tool that starts with no name', () => {
+  it('is warned about once per kind when it ends without a name - possibly a free tool, so not an error', async () => {
+    const warnings: string[] = [];
+    const errors: unknown[] = [];
+    const { stigg } = await newStigg({
+      logger: { ...noopLogger, warn: (message: string) => warnings.push(message) },
+      onError: (err) => errors.push(err),
+    });
+    const middleware = stigg.middleware({
+      stiggContext: { entitlement: credits, ingestMode: 'sync' },
+      tools: { web_search: credits },
+    });
+
+    // A calculator called directly, three times: no name, no tool call, nothing to price it by.
+    for (const runId of ['t1', 't2', 't3']) {
+      await middleware.startTool(runId, { kind: 'Calculator', input: {} }, lead);
+      await middleware.endTool(runId, 4);
+    }
+    await stigg.flush();
+
+    assert.deepEqual(errors, [], 'not a metering failure on every call');
+    assert.equal(warnings.filter((w) => w.includes('(Calculator) ran with no name')).length, 1);
+  });
+
+  it('is refused before it runs when the run names no customer, as a named tool is', async () => {
+    const { middleware } = await graph({ tools: { web_search: credits } });
+
+    await assert.rejects(middleware.startTool('t1', { input: {} }, { agent: 'lead' }), /No customerId/);
+  });
+
+  it('is let through untouched when nothing is governed - a config of only exemptions', async () => {
+    const { middleware, flushed } = await graph({ tools: { '*': false } });
+
+    // No customer, and no entry that governs anything: nothing to hold it for, so nothing to refuse.
+    await middleware.startTool('t1', { input: {} }, { agent: 'lead' });
+    await middleware.endTool('t1', 'found', 'web_search');
+
+    const { checked, ingests } = await flushed();
+    assert.deepEqual(checked, []);
+    assert.equal(ingests.length, 0);
+  });
+
+  it('says so when it is dropped to make room, rather than go unreported in silence', async () => {
+    const { middleware, flushed } = await graph({ tools: { web_search: credits } });
+
+    // Ten thousand and one unnamed tools started and never ended: the oldest makes room.
+    for (let n = 0; n <= 10_000; n += 1) await middleware.startTool(`t${n}`, { input: {} }, lead);
+    await middleware.endTool('t0', 'found', 'web_search');
+
+    const { ingests, errors } = await flushed();
+    assert.equal(ingests.length, 0, 'the dropped tool reports nothing on its late end');
+    assert.match(String(errors[0]), /a tool with no name was still in flight/);
   });
 });
 

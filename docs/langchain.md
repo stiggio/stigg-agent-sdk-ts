@@ -49,11 +49,11 @@ run's `stiggCustomerId` wins over the default, so it must come from your server 
 
 What happens on each step:
 
-| Step            | Before it runs                                          | After it succeeds                                   |
-| --------------- | ------------------------------------------------------- | --------------------------------------------------- |
-| A model call    | checked against the entitlement, when one is named      | its token usage reported, through the `usageMapper` |
-| A governed tool | checked against the tool's entitlement, when it has one | its `usage` reported, or one unit                   |
-| Any other tool  | nothing                                                 | nothing                                             |
+| Step            | Before it runs                                          | After it succeeds                                                                                                                     |
+| --------------- | ------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| A model call    | checked against the entitlement, when one is named      | its token usage reported, through the `usageMapper` - a chat model's `usage_metadata`, or a completion model's `llmOutput.tokenUsage` |
+| A governed tool | checked against the tool's entitlement, when it has one | its `usage` reported, or one unit                                                                                                     |
+| Any other tool  | nothing                                                 | nothing                                                                                                                               |
 
 A step that fails is billed nothing. A refusal is thrown as `AccessDeniedError` from inside the
 step, which is the only way a callback can stop LangChain; what it means is up to the graph - see
@@ -134,8 +134,19 @@ new StiggLangChainCallbackHandler({
 Each step is checked and billed as the agent that took it, against that agent's own budget - and,
 through the parent, the graph's. One agent running dry refuses that agent's steps and nothing else.
 
-- **Keys.** An agent is found by the name LangChain stamps on its steps: the `name` given to
-  `createAgent({ name })`, or the node's name in a hand-built LangGraph `StateGraph`.
+- **Keys.** A step belongs to the nearest run above it named for an agent in `agents`: a
+  `createAgent` or `createReactAgent` by its `name`, or a node of a hand-built LangGraph
+  `StateGraph` by its own. That is LangChain's run tree, so a sub-agent is billed as itself even
+  when the tool that runs it passes on its parent's config - and the `lc_agent_name` in a run's
+  metadata, which a caller can set, never decides whose budget pays.
+- **Name every sub-agent.** One with no name, or a name `agents` does not list, is billed as the
+  nearest listed agent above it - usually its parent. In a hand-built graph, name a node after the
+  agent it runs, a subgraph's node included: the node's name is what the tree sees.
+- **A top-level agent: set `rootAgent`.** The run you `invoke` is named by whoever invokes it -
+  `invoke(input, { runName })` - so on its own its name would let a caller pick whose budget pays,
+  or step outside every agent's. `rootAgent: 'lead'` fixes it: the top-level run is that agent,
+  whatever it is named. When metadata names a configured agent that no run above a step is named
+  after, the SDK says so once.
 - **One context per step, not two.** An agent's `stiggContext` is laid over the shared one, field
   by field. Each step is checked once and reported once, under the merged context - an agent that
   sets only `agentId` still uses the shared `entitlement` and `usageMapper`. Nothing is billed twice.
@@ -214,8 +225,13 @@ researcher.invoke(...))`). Its model calls are already checked and billed as it,
   opts the agent out of the catch-all only - a tool the shared `tools` names is still governed
   until the agent names it `false` too.
 - **Who pays.** A tool is billed to the agent whose model called it, under that agent's context.
-- **A tool no model called** - a packaged tool a node invokes directly - often reaches the handler
-  with no name. It is then known by its class (`TavilySearch`), which only `'*'` covers.
+- **A packaged tool with no name.** A class-based tool like `TavilySearch` reaches the handler
+  without its name, which is then taken from the model's tool call - remembered in the process
+  that issued it. A run resumed on another process has no such call: its result still carries the
+  tool's name, so it is billed when it ends, but it runs unchecked, and the SDK warns once. A node
+  that invokes the tool directly (`tool.invoke({ q })`) has neither a call nor a named result: it is
+  not checked and cannot be priced, and the SDK warns once per kind of tool - it may be a free one. Only `'*'` covers both -
+  use it to govern packaged tools.
 - **Only a call that succeeded is billed**, once, keyed by the model's tool-call id. A call that
   runs again - a retry, a resumed graph - is checked again and billed under the same key.
 - Every entry is validated when the handler is built: one with neither an entitlement nor a
@@ -232,7 +248,11 @@ authenticated user - never passed through from the request.
 - **On LangGraph Platform**, the client sends the run's `metadata`, so a caller could name another
   customer. Set `stiggCustomerId` server-side instead - in your
   [custom auth](https://langchain-ai.github.io/langgraph/concepts/auth/) handler, from the
-  authenticated identity - and ignore or overwrite any value the client sent.
+  authenticated identity - and ignore or overwrite any value the client sent. The client can name
+  the run too, so set `rootAgent` on the handler rather than trust the run's name.
+- **With `defaultPlanId`**, every customer id a run names becomes a customer on that plan, so a
+  customer id a caller can choose is a customer a caller can create. Keep the id server-side, and
+  make the default plan a free one - on a paid plan, each new id would start a paid subscription.
 
 ## When Stigg refuses
 
@@ -309,6 +329,9 @@ await middleware.endTool(toolStepId, output);
 
 ## Known limits
 
+- **Completion models report usage once per batch.** A batch of prompts reports its whole token
+  usage on its first run, and a streamed completion reports none at all - which is said as a
+  metering failure rather than billed as zero.
 - **No reservation.** A check does not hold budget, so parallel tool calls from one agent can each
   pass and together overshoot.
 - **Rounding per call.** Each report is a whole unit per entity, so many small calls round up more

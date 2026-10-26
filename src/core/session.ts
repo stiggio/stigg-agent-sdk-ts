@@ -600,9 +600,9 @@ export class GovernanceSession {
 
   /**
    * Makes sure a customer with a default plan exists. Never throws, and answers whether Stigg was
-   * reached - false only for an outage, which is reported here and retried by the next call. A
-   * refusal is an answer: the SDK reports it once, and the call goes on to meet whatever the check
-   * says about a customer that does not exist.
+   * reached - false for a passing failure (unreachable, rate limited, timed out), which is reported
+   * here and retried after a short wait. A refusal is an answer: the SDK reports it once, and the
+   * call goes on to meet whatever the check says about a customer that does not exist.
    */
   private async provisionCustomer(context: ResolvedContext): Promise<boolean> {
     if (!context.defaultPlanId || !context.customerId || !this.deps.provisionCustomer) return true;

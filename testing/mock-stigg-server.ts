@@ -26,7 +26,8 @@ export type MockStiggServer = {
    * Fail every customer provisioning: `'unreachable'` answers 503, as an outage does, and
    * `'rejected'` answers an API error, as an unknown plan or a key that cannot write does.
    */
-  failProvisioning: false | 'unreachable' | 'rejected';
+  /** How provisioning fails: not at all, unreachable, or answered with a GraphQL error code. */
+  failProvisioning: false | 'unreachable' | 'rejected' | 'rate-limited' | { code: string };
   /**
    * The subscription decision a provisioning answers with. `REQUESTED_PLAN` by default - set it to
    * show a server that put the customer somewhere other than the plan they asked for.
@@ -788,6 +789,21 @@ function route(server: MockStiggServer, req: IncomingMessage, res: ServerRespons
       }
       if (server.failProvisioning === 'rejected') {
         send(res, 200, { data: null, errors: [{ message: 'plan not found', extensions: { code: 'PlanNotFound' } }] });
+        return;
+      }
+      if (typeof server.failProvisioning === 'object') {
+        send(res, 200, {
+          data: null,
+          errors: [{ message: 'refused', extensions: { code: server.failProvisioning.code } }],
+        });
+        return;
+      }
+      if (server.failProvisioning === 'rate-limited') {
+        // An answer, but not about the customer: a GraphQL error code like a refusal's.
+        send(res, 200, {
+          data: null,
+          errors: [{ message: 'too many requests', extensions: { code: 'RateLimitExceeded' } }],
+        });
         return;
       }
     }
