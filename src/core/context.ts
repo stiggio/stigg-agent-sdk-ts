@@ -35,6 +35,16 @@ export type StiggContext = {
   /** The tenant. Every governance call is scoped to one customer. */
   customerId?: string;
   /**
+   * The plan a customer is provisioned onto when Stigg does not know them yet. Optional: without
+   * it, an unknown customer is not provisioned.
+   *
+   * Kept apart from {@link StiggContext.customerId} rather than folded into it, because the two
+   * are usually given in different places - the plan once at `wrap`, for every customer the
+   * client will serve, and the customer per call. A call naming a different customer inherits the
+   * client's plan.
+   */
+  defaultPlanId?: string;
+  /**
    * The agent this call spends as. Travels as a dimension under
    * {@link StiggContext.attributionKey}, which is the entire mechanism by which an agent is
    * attributed - so naming one without a key is refused rather than guessed at.
@@ -121,6 +131,8 @@ export type ResolvedContext = {
    * reaches the engine resolves it first, so nothing downstream has to re-check it.
    */
   customerId: string;
+  /** The plan an unknown customer is provisioned onto - undefined when none was given. */
+  defaultPlanId?: string;
   entitlement?: Entitlement;
   /** The agent folded in, so the check and the report send one object and neither re-derives it. */
   dimensions: Record<string, string>;
@@ -141,6 +153,14 @@ export type ResolvedContext = {
    * itself to build its own.
    */
   attributionKey?: string;
+  /**
+   * The orchestrator's own name for the agent that took this step, when a middleware governs it -
+   * `lead`, `researcher`. A label for hooks and logs, never sent: what Stigg attributes by is
+   * `agentId`, which a customer-level run does not have.
+   */
+  agent?: string;
+  /** The paid tool this step ran, when a middleware checked one - a label, like `agent`. */
+  tool?: string;
 };
 
 /**
@@ -178,16 +198,29 @@ function agentDimension(context: StiggContext): Record<string, string> | undefin
 }
 
 /**
- * Validates and derives, once. Everything expensive about a context happens here rather than on
- * the call path - see the note at the top of this file for why that split exists.
+ * A plan id as given, trimmed - or a refusal when it was given blank. Absent stays absent: no
+ * plan is a legal choice, while an empty one is a typo that would provision nobody onto nothing.
  */
-/** The one field a call cannot proceed without, said the same way wherever it is missing. */
-export const noCustomer = (): Error =>
-  new Error(
-    'No customerId - every governance call is scoped to a tenant. Give `wrap(client, ' +
-      '{ stiggContext: { customerId } })` a default for every call through this client, or name ' +
-      'one per call in `stiggContext`.',
-  );
+function planId(value: unknown): string | undefined {
+  if (value === undefined) return undefined;
+  const named = typeof value === 'string' ? value.trim() : '';
+  if (!named) {
+    throw new Error(
+      'stiggContext.defaultPlanId is empty - leave the field out to provision no plan, or name the ' +
+        'plan new customers should start on.',
+    );
+  }
+  return named;
+}
+
+/**
+ * The one field a call cannot proceed without, refused the same way from every binding. Only where
+ * to put the customer differs, so the remedy is the caller's to word.
+ */
+export const noCustomer = (
+  remedy = 'Give `wrap(client, { stiggContext: { customerId } })` a default for every call through ' +
+    'this client, or name one per call in `stiggContext`.',
+): Error => new Error(`No customerId - every governance call is scoped to a tenant. ${remedy}`);
 
 /**
  * The client-wide policy a context falls back to before the SDK's own defaults.
@@ -198,6 +231,10 @@ export const noCustomer = (): Error =>
  */
 export type ContextDefaults = { checkErrorAction?: CheckErrorAction; ingestMode?: IngestMode };
 
+/**
+ * Validates and derives, once. Everything expensive about a context happens here rather than on
+ * the call path - see the note at the top of this file for why that split exists.
+ */
 export function resolveContext(
   context: StiggContext,
   correlationId: string,
@@ -233,6 +270,7 @@ export function resolveContext(
 
   return {
     customerId,
+    defaultPlanId: planId(context.defaultPlanId),
     // Normalized, not passed through: `isEnforced` asks `!== undefined` while every other reader
     // asks for truthiness, so a JS caller's `entitlement: null` would be enforced by one and
     // absent to the rest - a call that runs the gate and then reports itself ungated.
@@ -257,6 +295,7 @@ export function resolveContext(
  */
 const CONTEXT_KEYS: Record<keyof StiggContext, true> = {
   customerId: true,
+  defaultPlanId: true,
   agentId: true,
   attributionKey: true,
   dimensions: true,
@@ -369,6 +408,9 @@ export function overrideContext(base: ResolvedContext, override: StiggContext): 
 
   return {
     customerId,
+    // Independent of the customer: a call naming its own customer still provisions onto the
+    // client's plan unless it names a plan too.
+    defaultPlanId: override.defaultPlanId !== undefined ? planId(override.defaultPlanId) : base.defaultPlanId,
     entitlement,
     dimensions,
     checkedId,

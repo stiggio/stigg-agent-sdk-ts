@@ -24,6 +24,9 @@ export { describeDecision, remedyMessage } from './decision-text';
 export { GOVERNANCE_HEADERS, parseGovernanceHeaders } from './headers';
 export type { GovernanceHeaders, ParsedGovernanceHeaders } from './headers';
 export { consoleLogger, noopLogger } from './logger';
+// The OpenTelemetry instrumentation scope of every `stigg.check` / `stigg.ingest` span, for a span
+// filter to match on - Langfuse's `shouldExportSpan`, for one, exports only scopes it knows.
+export { TRACER_NAME as STIGG_TRACER_NAME } from './core/telemetry';
 export type { Logger } from './logger';
 
 export {
@@ -63,6 +66,13 @@ export {
 } from './types';
 export type {
   AgentBudget,
+  MiddlewareOptions,
+  MiddlewareAgentOptions,
+  MiddlewareTools,
+  ToolGovernance,
+  ToolUsageMapper,
+  ToolCallMeasurement,
+  GovernedAgentMiddleware,
   AgentOptions,
   AgentScope,
   ClientGovernance,
@@ -180,4 +190,13 @@ export { weightedMetrics } from './bindings/shared/weighted-metrics';
 export type { WeightedMetricsOptions } from './bindings/shared/weighted-metrics';
 
 export type { ProxyIngestInput } from './bindings/proxy';
+// The orchestration binding's neutral half: an agent graph's middleware, from `stigg.middleware(...)`.
+// Its framework bindings import their framework, so they live on their own entry points - LangChain
+// and LangGraph's is `@stigg/agent-sdk-js/langchain` - and this one stays free of them.
+export type {
+  AgentMiddleware,
+  IssuedToolCall,
+  StepAttribution,
+  ToolStep,
+} from './bindings/orchestrator/core/agent-middleware';
 export { normalizedMetrics, normalizeUsage } from './bindings/shared/token-usage';

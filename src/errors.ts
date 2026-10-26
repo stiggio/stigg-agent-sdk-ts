@@ -89,13 +89,36 @@ export class GovernanceNotEnabledError extends Error {
   }
 }
 
-/** Returns the decision when `err` is a governance denial - the one-liner for a binding catch. */
+/**
+ * How far down a wrapped error is searched. Each LangChain middleware that wraps a model call adds
+ * one `MiddlewareError` around a denial, and a sub-agent's run nests its own inside its parent's,
+ * so a handful of levels is ordinary. The bound is only there so a cyclic `cause` cannot spin.
+ */
+const MAX_CAUSE_DEPTH = 16;
+
+/**
+ * Returns the decision when `err` is a governance denial - the one-liner for a binding catch.
+ *
+ * Frameworks rarely let an error through untouched. Vendor SDKs wrap callback errors, LangChain
+ * wraps a model call's error once per middleware, and LangGraph reports two branches that failed
+ * in one step as an `AggregateError` - so the denial is looked for down the whole `cause` chain and
+ * inside every aggregated error, not only at the top.
+ */
 export function isAccessDenied(err: unknown): AccessDecision | undefined {
+  return findDenial(err, 0);
+}
+
+function findDenial(err: unknown, depth: number): AccessDecision | undefined {
   if (isKind(err, 'denied')) return (err as AccessDeniedError).decision;
-  // Vendor SDKs wrap callback errors, so the denial can arrive one level down.
-  const cause = (err as { cause?: unknown } | undefined)?.cause;
-  if (cause && isKind(cause, 'denied')) return (cause as AccessDeniedError).decision;
-  return undefined;
+  if (typeof err !== 'object' || err === null || depth >= MAX_CAUSE_DEPTH) return undefined;
+  const { cause, errors } = err as { cause?: unknown; errors?: unknown };
+  if (Array.isArray(errors)) {
+    for (const inner of errors) {
+      const decision = findDenial(inner, depth + 1);
+      if (decision) return decision;
+    }
+  }
+  return cause === undefined ? undefined : findDenial(cause, depth + 1);
 }
 
 export const isEngineError = (err: unknown): err is EngineError => isKind(err, 'engine');

@@ -97,26 +97,53 @@ function openSse(res: ServerResponse, headers: Record<string, string> = {}): voi
 // Anthropic Messages API
 // ----------------------------------------------------------------------------------------
 
-/** True when tools are on offer and none has been called yet, so the turn should call one. */
-function shouldCallTool(body: any): boolean {
-  if (!body.tools?.length) return false;
-  for (const message of body.messages ?? []) {
+/**
+ * The first tool on offer that this turn has not called yet, or none once each has been.
+ *
+ * One per turn, in the order offered - so an agent holding a single tool calls it once and then
+ * answers, and an orchestrator holding several subagents as tools delegates to each in turn,
+ * which is the only way a lead agent reaches more than one of them with no model behind it.
+ *
+ * A turn starts at the latest message the user typed, so a chat delegates again on every new
+ * request rather than once per conversation. Tool results also arrive as `user` messages - those
+ * are the turn continuing, not a new one.
+ */
+function nextToolToCall(body: any): any {
+  if (!body.tools?.length) return undefined;
+  const messages: any[] = body.messages ?? [];
+  const isToolResult = (message: any) =>
+    Array.isArray(message.content) && message.content.some((block: any) => block?.type === 'tool_result');
+  let turnStart = messages.length - 1;
+  while (turnStart > 0 && (messages[turnStart].role !== 'user' || isToolResult(messages[turnStart]))) turnStart -= 1;
+  const called = new Set<string>();
+  for (const message of messages.slice(turnStart)) {
     if (!Array.isArray(message.content)) continue;
-    if (message.content.some((block: any) => block?.type === 'tool_result')) return false;
+    for (const block of message.content) if (block?.type === 'tool_use') called.add(block.name);
   }
-  return true;
+  return body.tools.find((tool: any) => !called.has(tool.name));
+}
+
+/**
+ * Arguments a tool will accept: canned text for each string field it declares. A tool declaring
+ * none gets the first two numbers in the conversation, so a calculator's result looks sensible.
+ */
+function toolInput(tool: any, messages: unknown): Record<string, unknown> {
+  const strings = Object.entries(tool.input_schema?.properties ?? {})
+    .filter(([, schema]: [string, any]) => schema?.type === 'string')
+    .map(([name]) => [name, `mock ${name} for ${tool.name}`]);
+  return strings.length ? Object.fromEntries(strings) : numbersIn(messages);
 }
 
 function anthropicMessage(body: any) {
   const inputTokens = estimateTokens(body.messages);
-  const content = shouldCallTool(body)
+  const tool = nextToolToCall(body);
+  const content = tool
     ? [
         {
           type: 'tool_use',
           id: `toolu_mock${Math.random().toString(16).slice(2, 10)}`,
-          name: body.tools[0].name,
-          // Reuse the first two numbers in the conversation so tool results look sensible.
-          input: numbersIn(body.messages),
+          name: tool.name,
+          input: toolInput(tool, body.messages),
         },
       ]
     : [{ type: 'text', text: ANTHROPIC_TEXT }];

@@ -9,6 +9,6 @@
     "outDir": "./dist",
     "rootDir": "./src"
   },
-  "files": ["src/index.ts", "src/internal.ts"],
+  "files": ["src/index.ts", "src/internal.ts", "src/integrations/langchain.ts"],
   "include": []
 }

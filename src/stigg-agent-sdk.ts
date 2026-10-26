@@ -20,6 +20,7 @@ import {
   type EngineResolution,
   type EntityPlacement,
   type GovernanceEngine,
+  type ProvisionOutcome,
 } from './engine/engine';
 import { asEngineError, EngineError, GovernanceNotEnabledError, isAccessDenied } from './errors';
 import { parseGovernanceHeaders } from './headers';
@@ -40,6 +41,7 @@ import { typesafeRecipe } from './bindings/client/providers/typesafe/typesafe-re
 import { createClientRegistry } from './bindings/client/core/registry';
 import type { ClientRegistry } from './bindings/client/core/types';
 import { wrapClient } from './bindings/client/core/wrap-client';
+import { createAgentMiddleware, resolveAgents } from './bindings/orchestrator/core/agent-middleware';
 import { observedMeasurement } from './bindings/shared/token-usage';
 import { isEnforced, noCustomer, overrideContext, resolveContext } from './core/context';
 import type { ContextDefaults } from './core/context';
@@ -50,6 +52,8 @@ import type { SessionHooks } from './core/session';
 import { safely } from './core/hooks';
 import type {
   Metrics,
+  GovernedAgentMiddleware,
+  MiddlewareOptions,
   ClientGovernance,
   ClientOptions,
   DeregisterInput,
@@ -72,8 +76,8 @@ import {
 
 /**
  * Recipes are data - method paths and usage extractors - so wiring them here costs nothing at
- * runtime and pulls in no vendor package. An orchestration adapter is different: it needs its
- * framework loaded, so it stays an explicit subpath import.
+ * runtime and pulls in no vendor package. The LangChain handler, which does load its framework,
+ * is reached only through the `@stigg/agent-sdk-js/langchain` entry, never from here.
  */
 /**
  * Order matters: the gateways are matched before the plain OpenAI adapter, because every one of
@@ -153,6 +157,12 @@ const DEFAULT_WALLET = { currencyId: 'credits' } as const;
  */
 const RETRY_START_AFTER_MS = 2_000;
 
+/**
+ * How many customers one process remembers having provisioned. A server serving an open-ended set
+ * of tenants would otherwise grow this for as long as it runs.
+ */
+const KNOWN_CUSTOMERS_CAP = 10_000;
+
 /** The key shorthand and the options object, folded into the one object the config takes. */
 function toOptions(
   first?: string | StiggAgentSDKOptions,
@@ -227,6 +237,18 @@ export class StiggAgentSDK {
    * rather than once each. Only the memoized path is shared - see `register`.
    */
   private readonly registering = new Map<string, Promise<void>>();
+  /**
+   * Customers this process has provisioned, by id - settled or still in flight. Shared by every
+   * client, so a customer seen by ten wrapped clients is provisioned once.
+   *
+   * A refusal is remembered like a success: an unknown plan or a key that cannot write will be
+   * refused the same way next time, and retrying it would spend a rate-limited call on every call.
+   * Only an unreachable Stigg is forgotten, so the customer's next call tries again.
+   *
+   * Capped at {@link KNOWN_CUSTOMERS_CAP}, oldest first. Forgetting a customer costs one more
+   * provisioning call, which Stigg answers as a duplicate - so the cap bounds memory, not safety.
+   */
+  private readonly customers = new Map<string, Promise<void>>();
   private started?: Promise<{ engine: GovernanceEngine; resolution: EngineResolution }>;
   /**
    * When the attempt currently in `started` rejected, or undefined while it is pending or has
@@ -472,6 +494,48 @@ export class StiggAgentSDK {
   }
 
   /**
+   * An agent graph's governance middleware - the orchestration counterpart to `wrap`.
+   *
+   * There is no single client to gate in a graph: it is several agents, each spending against its
+   * own entitlement. So the graph is configured once - the shared context, and each agent's own
+   * under `agents` - and every step it takes is checked and billed as the agent that took it. A
+   * refusal is thrown as `AccessDeniedError` from inside the refused agent; what that means for the
+   * run is the graph's to decide.
+   *
+   * What comes back is framework-neutral: the start and end of each model call and tool. A
+   * framework binding drives it - `new StiggLangChainCallbackHandler({ stigg, ...options })` from
+   * `@stigg/agent-sdk-js/langchain` builds one of these - and so can a harness of your own.
+   */
+  middleware(options: MiddlewareOptions = {}): GovernedAgentMiddleware {
+    // Started, not awaited, and caught - for the reasons `wrap` gives.
+    void this.ensureStarted().catch((err: unknown) => this.reportStartupFailure(err));
+    const shared = resolveContext(options.stiggContext ?? {}, randomUUID(), {
+      requireCustomer: false,
+      defaults: this.contextDefaults,
+    });
+    const { shared: sharedAgent, agents } = resolveAgents(shared, options);
+
+    // Spans for the observability tool already tracing the graph - out of the box, for orchestrators only.
+    const session = this.newSession(options.hooks, { tracing: true });
+    const middleware = createAgentMiddleware(session, {
+      shared: sharedAgent,
+      agents,
+      onUnlisted: (agent) =>
+        this.config.logger.warn(
+          `[stigg] agent "${agent}" is not listed in the middleware's \`agents\`, so its calls are ` +
+            'governed by the shared `stiggContext` alone - at the customer level unless that context ' +
+            'names an agent. List it to govern it as itself.',
+        ),
+      missingCustomer:
+        options.missingCustomer ??
+        'Name one per run, or give the middleware a default in `stiggContext: { customerId }`.',
+    });
+    this.attachGovernance(middleware, session, shared);
+    if (shared.customerId) void session.warmUp(shared);
+    return middleware as GovernedAgentMiddleware;
+  }
+
+  /**
    * Hangs the governance handle off the wrapped client. Refuses to overwrite a `stigg` the vendor
    * already has: silently replacing one of its own properties would be a worse surprise.
    */
@@ -543,15 +607,75 @@ export class StiggAgentSDK {
     return { checkErrorAction: this.config.checkErrorAction, ingestMode: this.config.ingest };
   }
 
-  private newSession(hooks?: SessionHooks): GovernanceSession {
+  private newSession(hooks?: SessionHooks, { tracing = false } = {}): GovernanceSession {
     const session = new GovernanceSession({
+      tracing,
       engine: () => this.ensureStarted().then((state) => state.engine),
+      provisionCustomer: (customerId, planId) => this.provisionCustomer(customerId, planId),
       logger: this.config.logger,
       onError: this.config.onError,
       hooks: hooks ?? {},
     });
     this.sessions.add(session);
     return session;
+  }
+
+  /**
+   * Creates the customer on `planId` the first time this process sees them, if Stigg does not
+   * already know them. Keyed by customer alone: once one exists, which plan a later call names
+   * is irrelevant - an existing customer is never moved.
+   */
+  private provisionCustomer(customerId: string, planId: string): Promise<void> {
+    const known = this.customers.get(customerId);
+    if (known) return known;
+    const pending = this.ensureStarted().then(async ({ engine }) => {
+      const outcome = await engine.provisionCustomer?.(customerId, planId);
+      if (outcome?.status === 'created') this.describeProvisioned(customerId, planId, outcome);
+      // Said once, here, rather than by every call that follows: the memo keeps the refusal, so
+      // later calls go straight to the check, which answers for a customer that does not exist.
+      if (outcome?.status === 'rejected') {
+        const error = new EngineError(
+          'provisionCustomer',
+          `Stigg refused to provision customer ${customerId} on plan ${planId}, and will not be ` +
+            `asked again by this process: ${outcome.reason}`,
+        );
+        safely(
+          () => this.config.onError(error, { operation: 'provisionCustomer', customerId }),
+          (reportErr) =>
+            this.config.logger.warn(`[stigg] onError threw while reporting ${error.message}: ${String(reportErr)}`),
+        );
+      }
+    });
+    this.customers.set(customerId, pending);
+    if (this.customers.size > KNOWN_CUSTOMERS_CAP) {
+      this.customers.delete(this.customers.keys().next().value!);
+    }
+    // Only its own entry: one evicted by the cap may have been replaced by a newer attempt for the
+    // same customer by the time it fails, and deleting that one would re-ask a settled customer.
+    pending.catch(() => {
+      if (this.customers.get(customerId) === pending) this.customers.delete(customerId);
+    });
+    return pending;
+  }
+
+  /**
+   * The server picks the first subscription, and the plan asked for is only a request: a
+   * predefined free or trial plan can win, or no subscription may be created at all. Logging
+   * success regardless would hide a customer who landed somewhere nobody chose.
+   */
+  private describeProvisioned(
+    customerId: string,
+    planId: string,
+    outcome: Extract<ProvisionOutcome, { status: 'created' }>,
+  ): void {
+    if (outcome.decision === 'REQUESTED_PLAN' && outcome.planId === planId) {
+      this.config.logger.info(`[stigg] customer ${customerId} provisioned on plan ${planId}`);
+      return;
+    }
+    this.config.logger.warn(
+      `[stigg] customer ${customerId} was created, but not on plan ${planId}: Stigg chose ` +
+        `${outcome.decision}, and the customer is on ${outcome.planId ?? 'no plan'}.`,
+    );
   }
 
   /** The session the no-client paths share, built on first use so an unused SDK builds none. */

@@ -13,8 +13,8 @@
  */
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { readFileSync, readdirSync } from 'node:fs';
-import { join } from 'node:path';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 
 const SRC = join(__dirname, '..', 'src');
 
@@ -24,6 +24,11 @@ const ALLOWED: Record<string, string> = {
   '@stigg/typescript': 'engine/rest-governance-engine.ts',
   zod: 'config.ts',
   'node:crypto': 'stigg-agent-sdk.ts',
+  // Spans for every check and ingest. The API is a no-op until an application registers a provider.
+  '@opentelemetry/api': 'core/telemetry.ts',
+  // The one framework binding that needs its framework loaded, reached only through the
+  // `@stigg/agent-sdk-js/langchain` entry - see the entry-point test below.
+  '@langchain/core/callbacks/base': 'bindings/orchestrator/langchain/callback-handler.ts',
 };
 
 const sources = (dir = ''): string[] =>
@@ -61,5 +66,35 @@ describe('what src/ is allowed to import', () => {
    */
   it('keeps the decision seam pure', () => {
     assert.deepEqual(externalImports('engine/decision.ts'), []);
+  });
+
+  /**
+   * What `import '@stigg/agent-sdk-js'` loads at runtime: every module reachable from the main entry
+   * through a value import. A type-only import is erased, so it does not count.
+   */
+  const runtimeGraph = (entry: string): Set<string> => {
+    const seen = new Set<string>();
+    const visit = (file: string) => {
+      if (seen.has(file)) return;
+      seen.add(file);
+      const source = readFileSync(join(SRC, file), 'utf8');
+      for (const [statement, specifier] of source.matchAll(/(?:^|\n)\s*(?:import|export)\s[^;]*?from '(\.[^']*)'/g)) {
+        if (/^\s*(?:import|export)\s+type\s/.test(statement)) continue;
+        const target = join(dirname(file), specifier!);
+        visit(existsSync(join(SRC, `${target}.ts`)) ? `${target}.ts` : join(target, 'index.ts'));
+      }
+    };
+    visit(entry);
+    return seen;
+  };
+
+  it('keeps LangChain out of the main entry, so only `/langchain` loads it', () => {
+    const loaded = runtimeGraph('index.ts');
+    assert.ok(loaded.has('stigg-agent-sdk.ts'), 'the walk reaches the SDK, or it proves nothing');
+    assert.ok(
+      !loaded.has('bindings/orchestrator/langchain/callback-handler.ts'),
+      'the main entry must not load the LangChain binding at runtime',
+    );
+    assert.ok(runtimeGraph('integrations/langchain.ts').has('bindings/orchestrator/langchain/callback-handler.ts'));
   });
 });

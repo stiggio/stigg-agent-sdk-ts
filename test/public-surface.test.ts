@@ -16,6 +16,7 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import * as publicSurface from '../src';
 import * as internalSurface from '../src/internal';
+import * as langchainSurface from '../src/integrations/langchain';
 
 /** Everything a consumer may `import { … } from '@stigg/agent-sdk-js'`. */
 const PUBLIC = [
@@ -54,6 +55,7 @@ const PUBLIC = [
   'noopLogger',
   'normalizeUsage',
   'normalizedMetrics',
+  'STIGG_TRACER_NAME',
   'ollamaRecipe',
   'openAIRecipe',
   'openrouterRecipe',
@@ -129,6 +131,18 @@ describe('the published surface', () => {
 
   it('exports exactly what the internal entry point lends out', () => {
     assert.deepEqual(Object.keys(internalSurface).sort(), [...INTERNAL].sort());
+  });
+
+  // `@stigg/agent-sdk-js/langchain`: the handler, and what a catch block needs beside it. The
+  // errors are the main entry's own objects re-exported, so `instanceof` agrees across the two.
+  it('exports exactly what the LangChain entry point promises', () => {
+    assert.deepEqual(Object.keys(langchainSurface).sort(), [
+      'AccessDeniedError',
+      'CUSTOMER_METADATA_KEY',
+      'StiggLangChainCallbackHandler',
+      'isAccessDenied',
+    ]);
+    assert.equal(langchainSurface.AccessDeniedError, publicSurface.AccessDeniedError);
   });
 
   it('keeps the two entry points disjoint', () => {

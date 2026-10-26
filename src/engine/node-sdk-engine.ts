@@ -24,6 +24,7 @@ import type {
   EngineReportParams,
   EngineReportResult,
   GovernanceEngine,
+  ProvisionOutcome,
 } from './engine';
 
 /**
@@ -80,6 +81,12 @@ export type NodeSdkEngineOptions = {
    */
   client?: NodeSdkClient;
 };
+
+/**
+ * The API's own code for an error it answered with. Absent when nothing answered - a refused
+ * connection, a dropped socket - which is what tells a refusal apart from an outage.
+ */
+const errorCode = (err: unknown): string | undefined => (err as { errorCode?: string })?.errorCode;
 
 const LOCAL_HOSTS = new Set(['localhost', '127.0.0.1', '::1', '[::1]']);
 
@@ -169,6 +176,38 @@ export class NodeSdkEngine implements GovernanceEngine {
    */
   async preload(customerId: string): Promise<void> {
     await this.client.reloadEntitlements(customerId);
+  }
+
+  /**
+   * One mutation, no lookup first. Stigg refuses to provision a customer it already has - the
+   * whole mutation, subscription included - so an existing customer comes back as a duplicate and
+   * is left exactly as they were. Reading first would only add a round trip to every customer's
+   * first call in each process, to learn what the create already says.
+   *
+   * Here rather than on REST because the Node SDK creates the customer and the subscription in one
+   * mutation, and writes the entitlements it answers with straight into the cache - so the check
+   * that follows reads the new plan locally instead of fetching it.
+   *
+   * Throws only when Stigg did not answer. Any answer - created, duplicate, or refused - resolves,
+   * because the caller treats them differently: a refusal will be the same next time, and an
+   * unreachable server may not.
+   */
+  async provisionCustomer(customerId: string, planId: string): Promise<ProvisionOutcome> {
+    try {
+      const provisioned = await this.client.provisionCustomer({ customerId, subscriptionParams: { planId } });
+      return {
+        status: 'created',
+        decision: provisioned.subscriptionDecisionStrategy,
+        planId: provisioned.subscription?.planId,
+      };
+    } catch (err) {
+      const code = errorCode(err);
+      if (code === 'DuplicatedEntityNotAllowed') return { status: 'existing' };
+      if (code && code !== 'RequestTimeout') {
+        return { status: 'rejected', code, reason: err instanceof Error ? err.message : String(err) };
+      }
+      throw asEngineError('provisionCustomer', err);
+    }
   }
 
   async upsertEntity(): Promise<void> {
