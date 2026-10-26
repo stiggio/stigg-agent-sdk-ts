@@ -13,6 +13,7 @@ import type { StiggContext } from './core/context';
 import type { SessionSummary, SessionHooks } from './core/session';
 import type { GovernanceHeaders } from './headers';
 import type { ClientRecipe } from './bindings/client/core/types';
+import type { AgentMiddleware } from './bindings/orchestrator/core/agent-middleware';
 import type { ObservedVendor } from './bindings/shared/token-usage';
 import type { EventIngest } from './engine/engine';
 
@@ -394,6 +395,105 @@ export type ClientOptions = {
  * the compiler rather than from production.
  */
 export type ClientContext = Omit<StiggContext, 'idempotencyKey'> & { idempotencyKey?: never };
+
+/**
+ * The governance of one agent graph: `stigg.middleware(options)`. Framework-neutral - a framework
+ * binding drives it (for LangChain and LangGraph, `StiggLangChainCallbackHandler`, which takes the
+ * same options), and so can a customer's own harness.
+ *
+ * A graph is configured here rather than wired call by call: the shared settings once, and each
+ * agent that should be governed as itself under `agents`, by the name its framework knows it by.
+ * Every step is checked and billed as the agent that took it, so one agent running dry stops that
+ * agent and nothing else.
+ *
+ * The customer is the one thing usually left out, because that changes per request: it rides each
+ * run instead, wherever the binding says (on LangChain, `metadata.stiggCustomerId`), and wins over a
+ * default here. Set it server-side, from the authenticated user, never from the request.
+ */
+export type MiddlewareOptions = {
+  /**
+   * The context every agent starts from - what is checked, how usage prices, how it is reported.
+   * An agent's own `stiggContext` is laid over it, so this is where the parts they share go once.
+   * No `idempotencyKey`, for the reason a client's default has none: every step would share it.
+   */
+  stiggContext?: ClientContext;
+  /**
+   * The tools every agent may call that are governed, by tool name - `'*'` for every tool not
+   * named. An agent's own `tools` are laid over these. A tool not covered runs ungoverned.
+   */
+  tools?: MiddlewareTools;
+  /**
+   * Everything the graph reports back while it works. Each call's `HookContext.agent` says which
+   * agent took the step, so one hook can tell them apart.
+   */
+  hooks?: SessionHooks;
+  /**
+   * The agents governed as themselves, by the name the framework stamps on their steps - on
+   * LangChain, the `name` given to `createAgent`, or the node's name in a hand-built LangGraph graph.
+   *
+   * An agent left out is not left ungoverned: its steps run under the shared `stiggContext` alone -
+   * at the customer level, unless that context names an agent - and the SDK says once that it was
+   * not listed. Leave `agents` out entirely and every step is governed that way, which is a
+   * one-agent graph or a customer-level one.
+   */
+  agents?: Record<string, MiddlewareAgentOptions>;
+  /**
+   * Where this framework's caller puts the customer, for the refusal a step with none raises. Set
+   * by a framework binding; a harness of your own can name its own convention here.
+   */
+  missingCustomer?: string;
+};
+
+/** One agent's part of a graph's middleware, laid over the shared settings. */
+export type MiddlewareAgentOptions = {
+  /** This agent's context over the shared one - typically its `agentId`, and what it gates on. */
+  stiggContext?: ClientContext;
+  /** This agent's tools over the shared ones - its own paid tools, or `false` to exempt one. */
+  tools?: MiddlewareTools;
+};
+
+/**
+ * The governed tools of a graph, by tool name, with `'*'` standing for every tool not named.
+ *
+ * `false` exempts a tool, `'*'` included. It is what a sub-agent held as a tool needs under `'*'`:
+ * that sub-agent's own model calls are already checked and billed, so billing the tool that runs it
+ * too would charge the same work twice.
+ */
+export type MiddlewareTools = Record<string, Entitlement | ToolGovernance | false>;
+
+/**
+ * How one tool is governed. An entitlement alone is shorthand for `{ entitlement }`.
+ *
+ * - `entitlement` - checked before the tool runs, and refused like a model call.
+ * - `usage` - what a call that succeeded reports, from the tool's own input and output, as a
+ *   client's `usageMapper` does for a model call. Left out, a call reports one unit against
+ *   `entitlement`. Given without `entitlement`, the tool is metered and never refused.
+ */
+export type ToolGovernance =
+  | { entitlement: Entitlement; usage?: ToolUsageMapper }
+  | { entitlement?: undefined; usage: ToolUsageMapper };
+
+/**
+ * Turns one tool call into the metrics to report. Never throws into the run: a mapper that throws
+ * is a metering failure, reported through `onError` like any other.
+ */
+export type ToolUsageMapper = (call: ToolCallMeasurement) => Metrics;
+
+/** One tool call that succeeded, as a `ToolUsageMapper` sees it. */
+export type ToolCallMeasurement = {
+  /** The tool's name. */
+  name: string;
+  /** What the tool was called with - its arguments, parsed, when the framework passed them as JSON. */
+  input: unknown;
+  /** What the tool returned - parsed, when the framework passed it on as JSON. */
+  output: unknown;
+};
+
+/** A graph's middleware, carrying the same governance handle a wrapped client does. */
+export type GovernedAgentMiddleware = AgentMiddleware & {
+  /** What this graph did, and what is still in flight. */
+  readonly stigg: ClientGovernance;
+};
 
 /**
  * `register` - giving an agent an identity, a budget, and a place in the tree.

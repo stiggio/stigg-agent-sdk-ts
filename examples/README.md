@@ -4,7 +4,7 @@ What each one *demonstrates*, and how to run it, is [section 6 of the package
 README](../docs/guide.md#6-run-the-examples). This file answers the question that one does not:
 standing in this folder, which of these files is a thing you run?
 
-Seventeen are. Everything else is imported by them.
+Nineteen are. Everything else is imported by them.
 
 ## Runnable
 
@@ -21,6 +21,8 @@ Seventeen are. Everything else is imported by them.
 | `client/databricks.ts` | `example-client-databricks` — the OpenAI SDK pointed at a workspace `/serving-endpoints`. `AGENT_SDK_DATABRICKS_EXTERNAL=1` asserts the external-model route |
 | `client/typesafe.ts` | `example-client-typesafe` — **needs a real TypeSafe key**, see below |
 | `client/two-agents.ts` | `example-two-agents` — scripted, so it ends by itself |
+| `orchestrator/langchain.ts` | `example-orchestrator-langchain` — a multi-agent orchestrator chat — a lead LangChain `createAgent` that delegates to a researcher (with a tool loop) and a writer held as tools — governed by one `StiggLangChainCallbackHandler`, each agent as itself; once Stigg refuses the researcher, the lead takes another pass with a generalist answering without search; with a live trace, a guard rail of five calls per tool per run, and optional Langfuse tracing beside Stigg |
+| `orchestrator/langgraph.ts` | `example-orchestrator-langgraph` — the same chat as a hand-built LangGraph `StateGraph`, one node per agent: the same `StiggLangChainCallbackHandler`, `agents` keyed by node name, and a refused researcher routed to the generalist by a graph edge |
 | `gateway/openrouter.ts` | `example-gateway-openrouter` (and `example-gateway`) — the same gateway through `@openrouter/sdk` |
 | `gateway/litellm.ts` | `example-gateway-litellm` |
 | `gateway/bedrock.ts` | `example-gateway-bedrock` — the gateway that states no price, so it meters tokens |
@@ -35,10 +37,12 @@ built-in vendor mock speaks the chat wire formats, and TypeSafe's System One is 
 Stigg still falls back to its own mock there, so only the vendor key is required.
 
 The nine chat examples — `anthropic`, `openai`, `gemini`, `groq`, `mistral`, `ollama`,
-`openrouter`, `litellm` and `databricks` — share one REPL and stay open until you end them. The
+`openrouter`, `litellm` and `databricks` — share one REPL and stay open until you end them, as does
+`orchestrator/langchain`, which is a chat with a lead agent rather than with a model. The
 rest run a fixed script and exit: `typesafe`, which asks a whole set of typed questions in one call
 rather than holding a conversation, `two-agents`, `cloudflare`, and the gateway examples. The
-test suite runs three of those — the OpenRouter and LiteLLM gateways, and `two-agents`.
+test suite runs three of those — the OpenRouter and LiteLLM gateways, and `two-agents` — and
+the orchestrator chat as well, with its input piped in.
 
 ## Imported, not runnable
 
@@ -50,6 +54,10 @@ client/core/     chat.ts          the governed REPL every vendor chat shares
 gateway/core/    gateway.ts       both gateway topologies, shared by the two helpers
                  vendor.ts        where a gateway writes down what it charged, and how it is called
                  proxy.ts         a real HTTP proxy on a loopback socket
+
+orchestrator/    chat.ts          the governed multi-agent chat both orchestrator examples share:
+core/                             setup, the one Stigg handler, Langfuse, the REPL
+                 style.ts         terminal colours, agent tags and indentation
 ```
 
 Each `core/` directory holds the part that is not vendor-specific, and the files beside it hold

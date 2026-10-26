@@ -13,7 +13,8 @@ npm install @stigg/agent-sdk-js      # or: yarn add @stigg/agent-sdk-js
 ```
 
 Requires Node 22 or later. Ships CommonJS with type declarations, and a `./internal` subpath for
-the engine seam.
+the engine seam. `@opentelemetry/api` is an optional peer dependency: an orchestrator's spans use
+your application's copy when it has one, and nothing else needs it.
 
 Everything here runs **with no API keys and no Stigg account**: a built-in mock stands in for
 both the LLM vendors and the Stigg API.
@@ -169,6 +170,42 @@ await client.messages.create({ model, max_tokens: 1024, messages });
 entitlement, so the calls that follow read local state. That is an optimization and it is not
 awaited: a failure there is logged, never thrown, and the first check falls back to asking the
 server.
+
+**New customers can start on a default plan.** Name `defaultPlanId` beside the customer, and a
+customer Stigg has never seen is created on that plan before their first check or report — once
+per customer per process, shared by every client the SDK wrapped. It is resolved on its own, not
+as part of the customer, so the usual shape names the plan once at `wrap` and the customer per call:
+
+```ts
+const client = stigg.wrap(new Anthropic(), {
+  stiggContext: { entitlement: { currencyId: 'credits' }, defaultPlanId: 'plan-free' },
+});
+await client.messages.create({ model, max_tokens: 1024, messages, stiggContext: { customerId } });
+```
+
+- **An existing customer is never touched.** Stigg refuses to provision a customer it already
+  has, subscription included, and the SDK reads that refusal as "already there".
+- **The plan is a request, not a guarantee.** The server picks the first subscription, and a
+  predefined free or trial plan can win. When the customer lands anywhere but the plan asked for,
+  the SDK warns rather than logging success.
+- **A configuration refusal is final for the process.** An unknown plan, an archived one, or a key
+  that cannot write is reported to `onError` once and not asked again; the check then answers for a
+  customer that does not exist, which is a refusal — `checkErrorAction: 'allow'` does not wave
+  every new customer through a configuration mistake.
+- **Only a passing failure is retried, after a wait.** When Stigg could not be reached, rate-limited
+  the create, timed out or failed unexpectedly, the customer is asked again after 30 seconds - not on
+  every call, which would only press a rate-limited Stigg harder. Until then the check uses
+  `checkErrorAction` if it finds no customer. Every other answer - an unknown plan, a key that cannot
+  write, an invalid id - is final. An existing customer gets their real answer either way.
+- **Use a free plan.** Every customer id the SDK sees becomes a customer on this plan, so a paid
+  plan would start a real paid subscription for each one. And the customer id must come from your
+  server, from the authenticated user - never from a request, or a caller can create customers.
+- **It costs one write per customer per process.** The SDK sends the create without reading
+  first, and Stigg answers an existing customer with a duplicate refusal - so each process makes
+  one extra, refused call for every existing customer it serves, rather than a read before every
+  first call.
+- **`register()` does not provision.** An agent registered under a new customer still needs that
+  customer to exist.
 
 **`wrap` returns a copy.** The object you built is never mutated and keeps working ungoverned,
 which is what makes the governed one safe to hand around. Wrapping an already-governed client
@@ -429,9 +466,112 @@ are recipes over the same wrapper. One you **operate** is the opposite binding a
 | Client — a gateway whose cost is in a **header** | `wrap(client, { recipe: litellmRecipe() })`          | same wrapper; the recipe bills `x-litellm-response-cost` and attributes `response.model` | Yes, same as any client                    |
 | Client — a gateway that states **no** price      | `wrap(client, { recipe: databricksRecipe() })`       | same wrapper; no `cost` metric at all, and the model that answered is attributed instead | Yes, same as any client                    |
 | Gateway you **operate** (`bindings/proxy`)       | `client.stigg.headers()` → `stigg.ingestFromHeaders(...)` | attribution travels as `x-stigg-*` headers; `vendor` names the shape it observed         | **No — ingest only**                       |
+| Orchestrator — LangChain / LangGraph (`bindings/orchestrator`) | `new StiggLangChainCallbackHandler({ stigg, stiggContext, agents })` from `@stigg/agent-sdk-js/langchain`, one per graph, on `invoke(input, { callbacks, metadata })` — over the neutral `stigg.middleware(...)` | a callback handler: each step checked and billed as the agent that took it; checks before its agent's model calls and gated tools, ingests after | Yes — throws `AccessDeniedError` inside the refused agent; the graph decides |
 
 A client run that names no `entitlement` lands in the same column as the gateway — metering
 without a gate — except that it is in-process, and naming one turns it back on.
+
+#### Orchestrators: one handler per graph, governing each agent on its own
+
+An orchestrated run is several agents, each spending against its own entitlement, so there is no
+single client to gate. Graphs also grow, so a graph is configured in one place rather than wired
+agent by agent: the shared settings once, and each agent's own under `agents`. Every step is checked
+and billed as the agent that took it, so one agent running dry stops that agent and nothing else.
+
+Two layers, split the way the client binding is:
+
+- **`stigg.middleware(options)`** is the framework-neutral core — the start and end of every model
+  call and tool, as `wrapClient` is the vendor-neutral one. A harness of your own can drive it
+  directly.
+- **A framework binding** is what a user of that framework expects, built over it. For LangChain
+  and LangGraph that is a real `BaseCallbackHandler` subclass, on its own entry point so the main
+  one never loads `@langchain/core` (an optional peer dependency):
+
+```ts
+import { StiggAgentSDK } from '@stigg/agent-sdk-js';
+import { StiggLangChainCallbackHandler, AccessDeniedError } from '@stigg/agent-sdk-js/langchain';
+
+const stigg = new StiggAgentSDK({ apiKey });
+const stiggHandler = new StiggLangChainCallbackHandler({
+  stigg,
+  stiggContext: { attributionKey: 'agentId', entitlement: { currencyId: 'credits' } }, // shared
+  agents: {
+    // by the `name` given to createAgent
+    lead: { stiggContext: { agentId: 'agent-lead' } },
+    researcher: { stiggContext: { agentId: 'agent-researcher' }, tools: { tavily_search: { currencyId: 'credits' } } },
+  },
+});
+
+try {
+  await lead.invoke(input, {
+    callbacks: [stiggHandler, langfuseHandler], // beside any other handler
+    metadata: { stiggCustomerId: 'customer-acme' }, // per request
+  });
+} catch (e) {
+  if (e instanceof AccessDeniedError) console.log('refused:', e.decision.message);
+}
+```
+
+It blocks by default — `raiseError` and `awaitHandlers` are set in its constructor, which a
+handler that leaves them to its user does not, and then only logs its denials. Subclass it to add
+your own tracing; the subclass keeps blocking. LangChain copies a handler on its way into a nested
+run, and the copy shares the original's middleware, so a sub-agent's spend lands in the same graph.
+
+LangChain hands the handler to every call beneath the `invoke`, sub-agents included, and each step
+is governed as the agent named by `lc_agent_name` - the `name` given to `createAgent` - or, in a
+hand-built LangGraph `StateGraph`, by its node: there the node is the agent, and the integration is
+the same handler with `agents` keyed by node name. A paid tool is billed to the agent whose model
+called it, even when it runs in LangGraph's own `ToolNode`. Hooks get the same name as
+`HookContext.agent`. An agent left out of `agents` is not left ungoverned: its calls run
+under the shared `stiggContext` alone, at the customer level unless that context names an agent,
+and the SDK says once that it was not listed. Leave `agents` out entirely for a one-agent or
+customer-level graph.
+
+A callback cannot return a different value, so a refusal is thrown — the same `AccessDeniedError` a
+wrapped client raises — from inside the refused agent. A refused sub-agent rejects its own
+`invoke`, which its parent sees as a failed tool call and can route around; a refused top-level
+agent rejects yours, and `stigg.denial(err)` reads the decision back through however many errors
+LangChain wrapped it in. Ingest is awaited so the next check sees the spend, and never throws.
+`tools` governs a tool by name, with `'*'` for every tool not named and `false` to exempt one: an
+entitlement alone checks it and reports one unit per call, and a `usage` mapper reports what the
+call used instead.
+
+The run's `stiggCustomerId` wins over a default customer, so set it server-side from the
+authenticated user. On LangGraph Platform the client sends `metadata`, so set it in your auth
+handler, never from the request.
+
+Every configuration - metering only, one entitlement for the graph, an agent per budget, tools
+priced by use, and what to do with a refusal - is in the [LangChain and LangGraph guide](langchain.md).
+
+#### Observability: an orchestrator's checks and ingests are OpenTelemetry spans
+
+Inside an orchestrator, Stigg shows up in the trace your observability tool already records, with
+nothing to configure. `stigg.middleware` and the LangChain handler over it emit a `stigg.check` span
+for each check and a `stigg.ingest` span for each report, under the instrumentation scope
+`STIGG_TRACER_NAME` (`@stigg/agent-sdk-js`). A refusal is a span with status `ERROR` and an
+`AccessDeniedError` exception event, so Langfuse, Datadog, Honeycomb or any other OpenTelemetry
+backend sees Stigg's decisions in the same trace as the agent's own spans, with no vendor code in
+the SDK. Attributes are `stigg.*` for what only Stigg knows (customer, entitlement, `has_access`,
+`denied_by`, `remaining`, metrics reported) and the GenAI conventions for the rest
+(`gen_ai.agent.name`, `gen_ai.tool.name`). With no provider registered they cost nothing, and
+without `@opentelemetry/api` installed there are none. A wrapped client emits no spans: Stigg's own
+observability already covers it, and an application's tracing should not change because it wrapped
+a client.
+
+It matters most inside an orchestrator: a step Stigg refuses never reaches the other callbacks'
+error hooks, so their own span for it stays open — the `stigg.check` span is where the refusal is
+recorded. Langfuse exports only scopes it knows by default, so add Stigg's to its filter:
+
+```ts
+new LangfuseSpanProcessor({
+  shouldExportSpan: ({ otelSpan }) =>
+    isDefaultExportSpan(otelSpan) || otelSpan.instrumentationScope.name === STIGG_TRACER_NAME,
+});
+```
+
+The orchestrator example does exactly this when `AGENT_SDK_LANGFUSE_PUBLIC_KEY` and
+`AGENT_SDK_LANGFUSE_SECRET_KEY` are set, with each chat turn as one Langfuse trace and the chat as
+one session.
 
 #### Providers that speak the OpenAI wire format
 
@@ -1172,6 +1312,8 @@ Stigg account.
 | `example-client-databricks` | [`client/databricks.ts`](../examples/client/databricks.ts)             | An `OpenAI` client pointed at a workspace `/serving-endpoints`. The request names an **endpoint**, not a model, so the served model on the way back is the thing to watch. `AGENT_SDK_DATABRICKS_EXTERNAL=1` asserts the external-model route |
 | `example-client-typesafe`   | [`client/typesafe.ts`](../examples/client/typesafe.ts)                 | A non-chat client: typed questions, batched or one per call. **Needs a real TypeSafe key**                  |
 | `example-two-agents`        | [`client/two-agents.ts`](../examples/client/two-agents.ts)             | Two agents, one team: a sibling denied by its own cap, then the survivor denied by the team above it        |
+| `example-orchestrator-langchain` | [`orchestrator/langchain.ts`](../examples/orchestrator/langchain.ts) | A multi-agent orchestrator chat: a lead LangChain agent delegating to a researcher and a writer held as tools, governed by one `StiggLangChainCallbackHandler`, each agent as itself. The researcher searches until Stigg refuses it, then the lead takes another pass with a generalist answering from general knowledge. Every agent is registered under one parent agent, `agent-orchestrator`, whose budget caps the graph |
+| `example-orchestrator-langgraph` | [`orchestrator/langgraph.ts`](../examples/orchestrator/langgraph.ts) | The same chat as a hand-built LangGraph `StateGraph`, one node per agent. The Stigg integration is the LangChain example's word for word; a refused researcher is routed to the generalist by a graph edge |
 | `example-gateway-openrouter`| [`gateway/openrouter.ts`](../examples/gateway/openrouter.ts)           | The two gateway topologies: calling one gates, operating one only ingests. `example-gateway` runs this one  |
 | `example-gateway-litellm`   | [`gateway/litellm.ts`](../examples/gateway/litellm.ts)                 | The same two topologies when the cost is in a header: real spend, then tokens, from one request             |
 | `example-gateway-bedrock`   | [`gateway/bedrock.ts`](../examples/gateway/bedrock.ts)                 | A gateway that states no price: tokens are all there is to meter, and nothing proxies it                    |

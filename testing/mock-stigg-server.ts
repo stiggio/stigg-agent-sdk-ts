@@ -22,6 +22,23 @@ export type MockStiggServer = {
   governance: boolean;
   /** Answer the governance check with 503, to exercise the fail-closed path. */
   failChecks: boolean;
+  /**
+   * Fail every customer provisioning: `'unreachable'` answers 503, as an outage does, and
+   * `'rejected'` answers an API error, as an unknown plan or a key that cannot write does.
+   */
+  /** How provisioning fails: not at all, unreachable, or answered with a GraphQL error code. */
+  failProvisioning: false | 'unreachable' | 'rejected' | 'rate-limited' | { code: string };
+  /**
+   * The subscription decision a provisioning answers with. `REQUESTED_PLAN` by default - set it to
+   * show a server that put the customer somewhere other than the plan they asked for.
+   */
+  provisionDecision: string;
+  /**
+   * Answer a check for a customer nothing has created with `CustomerNotFound`, as a real account
+   * does. Off by default: the rest of the suite checks customers it never seeds, and reads them as
+   * an empty pool.
+   */
+  strictCustomers: boolean;
 };
 
 export type MockOptions = { governance?: boolean; failChecks?: boolean };
@@ -96,6 +113,13 @@ export type MockState = {
   entityWrites: Entity[];
   assignmentWrites: Assignment[];
   archived: string[];
+  /**
+   * Every provisioning the SDK asked for, in order - including the ones refused as duplicates. The
+   * write log for customers: it is what shows a repeated attempt, which the store cannot.
+   */
+  provisionAttempts: string[];
+  /** Every subscription a customer was actually provisioned with, in order. */
+  subscriptionWrites: { customerId: string; planId: string }[];
 };
 
 const newState = (): MockState => ({
@@ -110,6 +134,8 @@ const newState = (): MockState => ({
   entityWrites: [],
   assignmentWrites: [],
   archived: [],
+  provisionAttempts: [],
+  subscriptionWrites: [],
 });
 
 const customer = (mock: MockState, id: string): CustomerState => {
@@ -516,7 +542,77 @@ function governanceTree(mock: MockState, customerId: string, query: URLSearchPar
  * Note it never fails: a 404 here does not surface as an error, because the SDK answers from its
  * own fallback entitlement instead - so a missing route would read as "denied", not "broken".
  */
-function graphql(mock: MockState, body: any): unknown {
+function graphql(mock: MockState, body: any, provisionDecision = 'REQUESTED_PLAN'): unknown {
+  // Before the lookup below, which creates whatever customer a request names: provisioning is the
+  // one operation whose answer depends on the customer not existing yet.
+  if (body.operationName === 'ProvisionCustomer') {
+    const { refId, subscriptionParams } = body.variables.input;
+    // Stigg refuses the whole mutation for a customer it has - subscription included - which is
+    // what leaves an existing customer on the plan they were already on.
+    if (mock.customers.has(refId)) {
+      return {
+        data: null,
+        errors: [{ message: 'customer already exists', extensions: { code: 'DuplicatedEntityNotAllowed' } }],
+      };
+    }
+    customer(mock, refId);
+    const requested = provisionDecision;
+    const planId = requested === 'REQUESTED_PLAN' ? subscriptionParams?.planId : 'plan-predefined';
+    if (planId) mock.subscriptionWrites.push({ customerId: refId, planId });
+    const now = new Date().toISOString();
+    // Every field the mutation selects, even as null: Apollo logs each one a response leaves out.
+    const slimCustomer = {
+      __typename: 'Customer',
+      id: refId,
+      refId,
+      customerId: refId,
+      name: null,
+      email: null,
+      billingId: null,
+      additionalMetaData: null,
+      awsMarketplaceCustomerId: null,
+      createdAt: now,
+      updatedAt: now,
+    };
+    return {
+      data: {
+        provisionCustomer: {
+          __typename: 'ProvisionedCustomer',
+          customer: slimCustomer,
+          subscriptionDecisionStrategy: requested,
+          subscription: planId
+            ? {
+                __typename: 'CustomerSubscription',
+                id: `sub_${mock.subscriptionWrites.length}`,
+                refId: `sub_${mock.subscriptionWrites.length}`,
+                subscriptionId: `sub_${mock.subscriptionWrites.length}`,
+                status: 'ACTIVE',
+                additionalMetaData: null,
+                billingId: null,
+                billingLinkUrl: null,
+                effectiveEndDate: null,
+                cancellationDate: null,
+                currentBillingPeriodEnd: null,
+                pricingType: 'FREE',
+                latestInvoice: null,
+                paymentCollection: 'NOT_REQUIRED',
+                billingSyncError: null,
+                resource: null,
+                experimentInfo: null,
+                prices: [],
+                totalPrice: null,
+                addons: [],
+                plan: { __typename: 'Plan', id: planId, refId: planId },
+                customer: { __typename: 'Customer', id: refId, refId },
+              }
+            : null,
+          entitlements: [],
+          entitlementsV2: [],
+        },
+      },
+    };
+  }
+
   const state = customer(mock, body.variables?.query?.customerId ?? body.variables?.input?.customerId ?? '');
 
   switch (body.operationName) {
@@ -683,7 +779,49 @@ function route(server: MockStiggServer, req: IncomingMessage, res: ServerRespons
   const method = req.method ?? 'GET';
 
   if (path === '/graphql') {
-    send(res, 200, graphql(mock, body));
+    if (body.operationName === 'ProvisionCustomer') {
+      // Logged here, ahead of the failure modes: a refused or unanswered attempt is still one the
+      // SDK made, and counting it is how a test sees whether the SDK retried.
+      mock.provisionAttempts.push(body.variables.input.refId);
+      if (server.failProvisioning === 'unreachable') {
+        send(res, 503, { code: 'ServiceUnavailable', message: 'service unavailable' });
+        return;
+      }
+      if (server.failProvisioning === 'rejected') {
+        send(res, 200, { data: null, errors: [{ message: 'plan not found', extensions: { code: 'PlanNotFound' } }] });
+        return;
+      }
+      if (typeof server.failProvisioning === 'object') {
+        send(res, 200, {
+          data: null,
+          errors: [{ message: 'refused', extensions: { code: server.failProvisioning.code } }],
+        });
+        return;
+      }
+      if (server.failProvisioning === 'rate-limited') {
+        // An answer, but not about the customer: a GraphQL error code like a refusal's.
+        send(res, 200, {
+          data: null,
+          errors: [{ message: 'too many requests', extensions: { code: 'RateLimitExceeded' } }],
+        });
+        return;
+      }
+    }
+    const unknown = body.variables?.query?.customerId;
+    if (server.strictCustomers && body.operationName === 'GetEntitlementsState' && !mock.customers.has(unknown)) {
+      send(res, 200, {
+        data: {
+          entitlementsState: {
+            __typename: 'EntitlementsState',
+            accessDeniedReason: 'CustomerNotFound',
+            entitlements: [],
+            entitlementsV2: [],
+          },
+        },
+      });
+      return;
+    }
+    send(res, 200, graphql(mock, body, server.provisionDecision));
     return;
   }
 
@@ -893,6 +1031,9 @@ export async function startMockStiggServer(options: MockOptions = {}): Promise<M
     state: newState(),
     governance: options.governance ?? true,
     failChecks: options.failChecks ?? false,
+    failProvisioning: false,
+    provisionDecision: 'REQUESTED_PLAN',
+    strictCustomers: false,
   };
 
   const server: Server = createServer((req, res) => {

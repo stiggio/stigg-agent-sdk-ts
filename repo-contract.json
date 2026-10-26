@@ -117,6 +117,8 @@
         "example-gateway-databricks",
         "example-gateway-litellm",
         "example-gateway-openrouter",
+        "example-orchestrator-langchain",
+        "example-orchestrator-langgraph",
         "example-setup",
         "example-two-agents"
       ],

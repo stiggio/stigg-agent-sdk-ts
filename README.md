@@ -119,7 +119,10 @@ rather than handing back a client that quietly meters nothing.
 | Gate without a client to wrap | `stigg.check(context)` |
 | Meter something you measured yourself | `stigg.report(context, metrics)` |
 | Give an agent its own budget | `stigg.register({ customerId, agentId, budget })` |
+| Start new customers on a plan | `stiggContext: { defaultPlanId }`, beside `customerId` |
 | Meter a gateway you operate | `client.stigg.headers()` out, `stigg.ingestFromHeaders(...)` back |
+| Govern a LangChain / LangGraph agent graph ([guide](docs/langchain.md)) | `new StiggLangChainCallbackHandler({ stigg, agents, tools })` from `@stigg/agent-sdk-js/langchain` |
+| Govern a graph from your own harness | `stigg.middleware({ stiggContext, agents })` |
 
 One wrapped client serves every customer and every agent: the context is an argument, given once at
 `wrap` as a default and overridable inside any single call.

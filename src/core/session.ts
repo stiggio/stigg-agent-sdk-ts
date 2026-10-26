@@ -26,6 +26,7 @@ import { EngineError } from '../errors';
 import { GOVERNANCE_HEADERS, type GovernanceHeaders } from '../headers';
 import { flattenRaw } from './dimensions';
 import { safely } from './hooks';
+import { traceCheck, traceIngest } from './telemetry';
 import { addMetrics, isEnforced, type ResolvedContext } from './context';
 import type { EngineReportResult, GovernanceEngine } from '../engine/engine';
 import type { ErrorContext } from '../config';
@@ -64,6 +65,13 @@ export type HookContext = {
   correlationId: string;
   /** What the call gated on, when it gated on anything. Undefined on a metering-only run. */
   entitlementId?: string;
+  /**
+   * The agent that took the step, by the orchestrator's own name for it, when a middleware
+   * governs the run. Present at the customer level too, where nothing is attributed to an agent.
+   */
+  agent?: string;
+  /** The tool a step ran, when it was a paid tool a middleware checked. */
+  tool?: string;
 };
 
 /** What a context looks like to a hook: the attribution, and nothing a hook could change. */
@@ -72,6 +80,8 @@ const hookContext = (context: ResolvedContext): HookContext => ({
   dimensions: context.dimensions,
   correlationId: context.correlationId,
   entitlementId: context.checkedId,
+  ...(context.agent !== undefined ? { agent: context.agent } : {}),
+  ...(context.tool !== undefined ? { tool: context.tool } : {}),
 });
 
 export type SessionHooks = {
@@ -96,9 +106,20 @@ export type SessionDeps = {
    * than disappearing.
    */
   engine: () => Promise<GovernanceEngine>;
+  /**
+   * Creates the customer on their default plan if Stigg does not know them yet. Shared across
+   * every session of one SDK and remembered per customer, so only a customer's first call pays
+   * the round trip. Absent, nothing is ever provisioned.
+   */
+  provisionCustomer?: (customerId: string, planId: string) => Promise<void>;
   logger: Logger;
   onError: (error: EngineError, context: ErrorContext) => void;
   hooks: SessionHooks;
+  /**
+   * Whether each check and report is an OpenTelemetry span. On for an orchestrator's middleware,
+   * where an observability tool's trace is already open around the graph; off for `wrap`.
+   */
+  tracing?: boolean;
 };
 
 /** What a client did, for whoever wants to print it. Spans every context it served. */
@@ -138,6 +159,9 @@ export type IngestOptions = {
  * `'async'` report would reach the event API with no name at all.
  */
 const DEFAULT_EVENT_NAME = 'agent.usage';
+
+/** How both engines say a check found no such customer - the reason, verbatim, from the API. */
+const CUSTOMER_NOT_FOUND = 'CustomerNotFound';
 
 export class GovernanceSession {
   private readonly deps: SessionDeps;
@@ -187,6 +211,8 @@ export class GovernanceSession {
    * applies the error policy.
    */
   async warmUp(context: ResolvedContext): Promise<void> {
+    // First, so the cache below loads a customer that exists rather than remembering one that did not.
+    await this.provisionCustomer(context);
     if (!isEnforced(context)) return;
     try {
       await (await this.deps.engine()).preload?.(context.customerId, context.dimensions);
@@ -200,30 +226,43 @@ export class GovernanceSession {
    * application routes on, not an exception it recovers from.
    */
   async check(context: ResolvedContext, requestedUsage = 1): Promise<AccessDecision> {
+    const startedAt = Date.now();
     this.checks += 1;
     const { entitlement } = context;
     // Asked and answered, with nobody to ask: this context named no entitlement, so there is no
     // budget to consult and no refusal that could come back. Still counted and recorded, because
     // the caller did ask and `lastDecision` is where they read what they got.
-    if (!entitlement) return this.record(unenforcedDecision(), context);
+    if (!entitlement) return this.record(unenforcedDecision(), context, startedAt);
 
     try {
       const engine = await this.deps.engine();
+      // Before the check, not after: a customer Stigg has never seen holds no entitlement, so their
+      // first call would be refused for not existing yet.
+      const reached = await this.provisionCustomer(context);
       const result = await engine.check(context.customerId, {
         entitlement,
         requestedUsage,
         dimensions: context.dimensions,
       });
+      // The policy answers only when both halves say so: Stigg could not be reached to create the
+      // customer, and the check then found no customer. Either alone is not that. An existing
+      // customer gets the real answer whatever happened to the create, and a customer Stigg
+      // refused - an unknown plan, an archived customer - is refused here too, rather than
+      // waved through by an `allow` that exists for outages, not for configuration mistakes.
+      if (!reached && result.accessDeniedReason === CUSTOMER_NOT_FOUND) {
+        return this.record(policyDecision(context.checkErrorAction === 'allow'), context, startedAt);
+      }
       return this.record(
         toDecision(result, { customerId: context.customerId, entitlement: context.entitlement }),
         context,
+        startedAt,
       );
     } catch (err) {
       const error = asEngineError('check', err);
       this.reportError(error, 'check', context);
       // Governance is fail-closed server-side; `'deny'` mirrors that, and `'allow'` - the default -
       // is the soft limit that keeps the application up while Stigg is unreachable.
-      return this.record(policyDecision(context.checkErrorAction === 'allow'), context);
+      return this.record(policyDecision(context.checkErrorAction === 'allow'), context, startedAt);
     }
   }
 
@@ -323,6 +362,7 @@ export class GovernanceSession {
   ): Promise<IngestResult> {
     const { dimensions, idempotencyKey, raw, event } = sendOptions;
     const mode = context.ingestMode;
+    const startedAt = Date.now();
 
     // A broken value is one broken metric, not a broken call: the others measured fine and the
     // spend they describe already happened. Dropping only the bad one reports what is knowable.
@@ -369,17 +409,19 @@ export class GovernanceSession {
     // are still an ingest that happened, though - counted, so a client that meters nothing is
     // distinguishable from one that never tried, and reported to `onIngest` like every result.
     if (!Object.keys(sendable).length) {
-      if (rejected) return Promise.resolve(this.failedIngest(context, idempotencyKey, rejected));
+      if (rejected) return Promise.resolve(this.failedIngest(context, idempotencyKey, rejected, startedAt));
       this.ingested += 1;
       const noop: IngestResult = { ok: true, reported: {}, idempotencyKey, mode, replayed: false };
-      this.hook('onIngest', context, () => this.deps.hooks.onIngest?.(noop, hookContext(context)));
+      this.emitIngest(context, noop, startedAt);
       return Promise.resolve(noop);
     }
 
     const promise = this.deps
       .engine()
-      .then((engine) =>
-        engine.report(context.customerId, {
+      .then(async (engine) => {
+        // A metering-only client never checks, so this is the first place its customer is seen.
+        await this.provisionCustomer(context);
+        return engine.report(context.customerId, {
           metrics: sendable,
           entitlement: context.entitlement,
           mode,
@@ -389,8 +431,8 @@ export class GovernanceSession {
           dimensions,
           idempotencyKey,
           event: event ?? { name: DEFAULT_EVENT_NAME },
-        }),
-      )
+        });
+      })
       .then((result): IngestResult => {
         this.ingested += 1;
         // A replay is a delivery that consumed nothing - the server had already counted these
@@ -419,10 +461,10 @@ export class GovernanceSession {
           this.ingestFailures += 1;
           this.reportError(rejected, rejected.operation, context, idempotencyKey);
         }
-        this.hook('onIngest', context, () => this.deps.hooks.onIngest?.(landed, hookContext(context)));
+        this.emitIngest(context, landed, startedAt);
         return landed;
       })
-      .catch((err): IngestResult => this.failedIngest(context, idempotencyKey, asEngineError('ingest', err)))
+      .catch((err): IngestResult => this.failedIngest(context, idempotencyKey, asEngineError('ingest', err), startedAt))
       .finally(() => {
         this.pending.delete(promise);
       });
@@ -523,10 +565,28 @@ export class GovernanceSession {
     );
   }
 
-  private record(decision: AccessDecision, context: ResolvedContext): AccessDecision {
+  private record(decision: AccessDecision, context: ResolvedContext, startedAt: number): AccessDecision {
     this.decision = decision;
+    // Telemetry is instrumentation exactly as a hook is: it never reaches the caller.
+    if (this.deps.tracing) {
+      safely(
+        () => traceCheck(context, decision, startedAt),
+        (err) => this.deps.logger.debug(`[stigg] check span failed: ${String(err)}`),
+      );
+    }
     this.hook('onDecision', context, () => this.deps.hooks.onDecision?.(decision, hookContext(context)));
     return decision;
+  }
+
+  /** Every ingest result, however it ended: to its span, then to the application's hook. */
+  private emitIngest(context: ResolvedContext, result: IngestResult, startedAt: number): void {
+    if (this.deps.tracing) {
+      safely(
+        () => traceIngest(context, result, startedAt),
+        (err) => this.deps.logger.debug(`[stigg] ingest span failed: ${String(err)}`),
+      );
+    }
+    this.hook('onIngest', context, () => this.deps.hooks.onIngest?.(result, hookContext(context)));
   }
 
   /**
@@ -539,9 +599,27 @@ export class GovernanceSession {
   }
 
   /**
+   * Makes sure a customer with a default plan exists. Never throws, and answers whether Stigg was
+   * reached - false for a passing failure (unreachable, rate limited, timed out), which is reported
+   * here and retried after a short wait. A refusal is an answer: the SDK reports it once, and the
+   * call goes on to meet whatever the check says about a customer that does not exist.
+   */
+  private async provisionCustomer(context: ResolvedContext): Promise<boolean> {
+    if (!context.defaultPlanId || !context.customerId || !this.deps.provisionCustomer) return true;
+    try {
+      await this.deps.provisionCustomer(context.customerId, context.defaultPlanId);
+      return true;
+    } catch (err) {
+      this.reportError(asEngineError('provisionCustomer', err), 'provisionCustomer', context);
+      return false;
+    }
+  }
+
+  /**
    * The last stop for a failure. `onError` is the application's own code and can throw too, and
    * there is nowhere left to report that to, so it falls back to the logger.
    */
+
   private reportError(error: EngineError, operation: string, context?: ResolvedContext, idempotencyKey?: string): void {
     safely(
       () =>
@@ -555,7 +633,12 @@ export class GovernanceSession {
     );
   }
 
-  private failedIngest(context: ResolvedContext, idempotencyKey: string, error: EngineError): IngestResult {
+  private failedIngest(
+    context: ResolvedContext,
+    idempotencyKey: string,
+    error: EngineError,
+    startedAt = Date.now(),
+  ): IngestResult {
     this.ingestFailures += 1;
     // The error knows what failed - reading a vendor's usage is not the same event as the report
     // that would have followed it, and a context that says otherwise makes the two
@@ -580,7 +663,7 @@ export class GovernanceSession {
       replayed: error.replayed ?? false,
       error,
     };
-    this.hook('onIngest', context, () => this.deps.hooks.onIngest?.(failure, hookContext(context)));
+    this.emitIngest(context, failure, startedAt);
     return failure;
   }
 }

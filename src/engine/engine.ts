@@ -144,12 +144,37 @@ export type EntityInput = {
   metadata?: Record<string, string>;
 };
 
+/** What provisioning a customer came to. Every variant is an answer from Stigg. */
+export type ProvisionOutcome =
+  | {
+      status: 'created';
+      /** How the server chose the first subscription - `REQUESTED_PLAN` when it took ours. */
+      decision: string;
+      /** The plan the customer actually landed on, if they landed on one. */
+      planId?: string;
+    }
+  | { status: 'existing' }
+  /** Refused, for a reason a retry would not change: an unknown plan, a key that cannot write. */
+  | { status: 'rejected'; reason: string; code?: string };
+
 export interface GovernanceEngine {
   readonly capabilities: EngineCapabilities;
   upsertEntity(customerId: string, entity: EntityInput, placement?: EntityPlacement): Promise<void>;
   check(customerId: string, params: EngineCheckParams): Promise<EngineCheckResult>;
   report(customerId: string, params: EngineReportParams): Promise<EngineReportResult>;
   archiveEntity(customerId: string, entityId: string): Promise<void>;
+  /**
+   * Creates the customer on `planId` when Stigg does not know them yet, and does nothing when it
+   * does. `existing` is the common answer, and it leaves the customer's subscriptions alone: a
+   * default plan is where a new customer starts, never something an existing one is moved onto.
+   *
+   * Resolves for every answer Stigg gave - including `rejected`, a request it refused - and
+   * throws only when Stigg could not be reached, which is the one failure worth trying again.
+   *
+   * Optional: an engine with no customer API cannot provision, and the caller treats its absence
+   * as having nothing to do.
+   */
+  provisionCustomer?(customerId: string, planId: string): Promise<ProvisionOutcome>;
   /**
    * Loads whatever state this engine caches for a customer, so the checks that follow are local.
    *
