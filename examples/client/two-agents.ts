@@ -21,7 +21,7 @@ import Anthropic from '@anthropic-ai/sdk';
 import { StiggAgentSDK, entitlementId, type AccessDecision, type WrappedClient } from '../../src';
 import { maybeStartMockServer } from '../shared/mock-server';
 import { maybeStartMockStiggServer } from '../shared/mock-stigg-server';
-import { seedMock } from '../shared/setup-governance';
+import { prepareDemo } from '../shared/setup-governance';
 import { describeSetup, requireFixture, resolveDemoEnv } from '../shared/demo-env';
 import { requireKey, resolveStiggEnv } from '../shared/stigg-env';
 import { optionalEnv } from './core/vendor';
@@ -86,16 +86,6 @@ async function main(): Promise<void> {
   const mock = await maybeStartMockServer(apiKey);
   const stiggMock = await maybeStartMockStiggServer(env.offline);
 
-  // The account's own setup: entity types, the parent team, a funded pool. The pool has to dwarf
-  // the team's cap, or the first denial would come from an empty wallet and tell a different story.
-  if (stiggMock) {
-    await seedMock(demoEnv, stiggMock, {
-      agents: [],
-      teamLimit: TEAM_BUDGET,
-      poolMin: TEAM_BUDGET * 20,
-      log: () => undefined,
-    });
-  }
   console.log(`[governance] ${describeSetup(env, demoEnv)}`);
 
   // Nothing to turn off: both handles are attributed, so every check is a live governance call
@@ -103,6 +93,13 @@ async function main(): Promise<void> {
   const stigg = stiggMock
     ? new StiggAgentSDK({ baseUrl: stiggMock.baseUrl })
     : new StiggAgentSDK({ apiKey: requireKey(env), baseUrl: env.baseUrl });
+  // The account's own setup, created if missing: entity types, the demo plan - whose credits dwarf
+  // the team's cap, so the first denial comes from the team and not an empty wallet - and the team.
+  await prepareDemo(env, demoEnv, stigg, stiggMock, {
+    agents: [],
+    teamLimit: TEAM_BUDGET,
+    log: (line) => console.log(`[setup]${line}`),
+  });
   const agentType = requireFixture(
     demoEnv.agentType,
     'AGENT_SDK_DEMO_ENTITY_TYPE_ID / AGENT_SDK_DEMO_ATTRIBUTION_KEY',
@@ -114,6 +111,7 @@ async function main(): Promise<void> {
   const provision = (agentId: string, usageLimit: number) =>
     stigg.register({
       customerId: demoEnv.customerId,
+      defaultPlanId: demoEnv.planId,
       agentId,
       entityTypeId: agentType.entityTypeId,
       displayName: agentId,
@@ -158,6 +156,7 @@ async function main(): Promise<void> {
         // real pricing - see the other examples - and it reports fractions, because the wallet
         // takes them.
         usageMapper: () => ({ [entitlementId(entitlement)]: 1 }),
+        defaultPlanId: demoEnv.planId,
       },
     });
 

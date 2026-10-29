@@ -4,7 +4,7 @@ What each one *demonstrates*, and how to run it, is [section 6 of the package
 README](../docs/guide.md#6-run-the-examples). This file answers the question that one does not:
 standing in this folder, which of these files is a thing you run?
 
-Nineteen are. Everything else is imported by them.
+Twenty are. Everything else is imported by them.
 
 ## Runnable
 
@@ -22,7 +22,8 @@ Nineteen are. Everything else is imported by them.
 | `client/typesafe.ts` | `example-client-typesafe` — **needs a real TypeSafe key**, see below |
 | `client/two-agents.ts` | `example-two-agents` — scripted, so it ends by itself |
 | `orchestrator/langchain.ts` | `example-orchestrator-langchain` — a multi-agent orchestrator chat — a lead LangChain `createAgent` that delegates to a researcher (with a tool loop) and a writer held as tools — governed by one `StiggLangChainCallbackHandler`, each agent as itself; once Stigg refuses the researcher, the lead takes another pass with a generalist answering without search; with a live trace, a guard rail of five calls per tool per run, and optional Langfuse tracing beside Stigg |
-| `orchestrator/langgraph.ts` | `example-orchestrator-langgraph` — the same chat as a hand-built LangGraph `StateGraph`, one node per agent: the same `StiggLangChainCallbackHandler`, `agents` keyed by node name, and a refused researcher routed to the generalist by a graph edge |
+| `orchestrator/langgraph-handoff.ts` | `example-orchestrator-langgraph-handoff` — agents handing work to each other: the same chat as a hand-built LangGraph `StateGraph`, one node per agent: the same `StiggLangChainCallbackHandler`, `agents` keyed by node name, and a refused researcher routed to the generalist by a graph edge |
+| `orchestrator/langgraph-model-fallback.ts` | `example-orchestrator-langgraph-model-fallback` — one LangGraph agent in one node with a budget per model, each scoped to its model by a `model` dimension: it answers with an expensive Anthropic model until that model's budget runs out, then with a cheaper one in the same turn |
 | `gateway/openrouter.ts` | `example-gateway-openrouter` (and `example-gateway`) — the same gateway through `@openrouter/sdk` |
 | `gateway/litellm.ts` | `example-gateway-litellm` |
 | `gateway/bedrock.ts` | `example-gateway-bedrock` — the gateway that states no price, so it meters tokens |
@@ -55,8 +56,9 @@ gateway/core/    gateway.ts       both gateway topologies, shared by the two hel
                  vendor.ts        where a gateway writes down what it charged, and how it is called
                  proxy.ts         a real HTTP proxy on a loopback socket
 
-orchestrator/    chat.ts          the governed multi-agent chat both orchestrator examples share:
-core/                             setup, the one Stigg handler, Langfuse, the REPL
+orchestrator/    chat.ts          the governed chat every orchestrator example shares - each passes
+core/                             its own agents and budgets: setup, the one Stigg handler, Langfuse,
+                                  the REPL
                  style.ts         terminal colours, agent tags and indentation
 ```
 
@@ -70,10 +72,14 @@ wiring written once is governance wiring that cannot drift between vendors.
 shared/  load-env.ts          reads ../.env then demo.env; imported first, for its side effect
          stigg-env.ts         ../.env -> StiggEnv: which Stigg, the half a real app also has
          demo-env.ts          demo.env -> DemoEnv: the fixtures only a demo reads
-         setup-governance.ts  seeds the customer, pool, entity types, team and budgets
+         setup-governance.ts  seeds the currency or feature, entity types, demo plan, team and budgets
          mock-server.ts       the vendor mock: real Anthropic / OpenAI / Gemini / gateway wire formats
          mock-stigg-server.ts a shim over testing/mock-stigg-server.ts, shared with the tests
          demo.env.template    every AGENT_SDK_DEMO_* fixture, documented
 ```
 
 `demo.env` is yours and git-ignored; copy the template if you want to change the fixtures.
+
+With a real `STIGG_SERVER_API_KEY`, the seed writes to the environment that key belongs to: the
+credit currency or feature, the `team` / agent / `model` entity types, and a free demo plan it
+creates and publishes for new customers. Point the key at a sandbox environment, not production.

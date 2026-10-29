@@ -204,8 +204,9 @@ await client.messages.create({ model, max_tokens: 1024, messages, stiggContext: 
   first, and Stigg answers an existing customer with a duplicate refusal - so each process makes
   one extra, refused call for every existing customer it serves, rather than a read before every
   first call.
-- **`register()` does not provision.** An agent registered under a new customer still needs that
-  customer to exist.
+- **`register()` provisions too, when given `defaultPlanId`.** An entity needs its customer to
+  exist, so `register({ customerId, defaultPlanId, ... })` provisions the customer first - once per
+  customer per process, shared with the checks. Without it, a new customer must exist already.
 
 **`wrap` returns a copy.** The object you built is never mutated and keeps working ungoverned,
 which is what makes the governed one safe to hand around. Wrapping an already-governed client
@@ -505,7 +506,7 @@ const stiggHandler = new StiggLangChainCallbackHandler({
 try {
   await lead.invoke(input, {
     callbacks: [stiggHandler, langfuseHandler], // beside any other handler
-    metadata: { stiggCustomerId: 'customer-acme' }, // per request
+    metadata: { stiggContext: { customerId: 'customer-acme' } }, // per request - wrap's per-call override
   });
 } catch (e) {
   if (e instanceof AccessDeniedError) console.log('refused:', e.decision.message);
@@ -536,9 +537,9 @@ LangChain wrapped it in. Ingest is awaited so the next check sees the spend, and
 entitlement alone checks it and reports one unit per call, and a `usage` mapper reports what the
 call used instead.
 
-The run's `stiggCustomerId` wins over a default customer, so set it server-side from the
-authenticated user. On LangGraph Platform the client sends `metadata`, so set it in your auth
-handler, never from the request.
+The run's `stiggContext` is the per-call override `wrap` takes, and it wins over the handler's and
+the agent's, so set it server-side from the authenticated user. On LangGraph Platform the client
+sends `metadata`, so set it in your auth handler, never from the request.
 
 Every configuration - metering only, one entitlement for the graph, an agent per budget, tools
 priced by use, and what to do with a refusal - is in the [LangChain and LangGraph guide](langchain.md).
@@ -1113,22 +1114,33 @@ yarn example-setup --no-governance    # seed without entities
 yarn example-setup --archive          # clean up, bottom-up
 ```
 
-`--no-governance` describes this invocation only: it skips the entity and budget steps, so the
+**Every example runs this seed when it starts**, live and offline, so you rarely need to run it
+yourself: it reads each object first and creates only what is missing, saying what it created.
+Run it by hand to seed the agents of every example at once, or to clean up with `--archive`.
+
+`--no-governance` describes this invocation only: it skips the entity types and budgets, so the
 account is seeded without a tree. It is not a mode the examples inherit — offline, each one starts
 its own mock, and that mock has governance enabled. To see customer-level enforcement end to end,
 use an account that genuinely has no governance.
 
-Idempotent per step, and safe to re-run — but not safe to run twice **at once**: the credit grant
-reads the balance and then grants, with nothing between the two, so two concurrent invocations can
-both decide the pool is short and both fund it. Run it once at a time. Steps are gated by what the
-account actually has:
+**The customer is not created here.** The SDK does it: every example names the demo plan as
+`stiggContext.defaultPlanId` (and passes it to `register`), so a customer Stigg has never seen is
+provisioned onto that plan by its first call. The plan carries the demo's monthly credits, so a new
+customer arrives funded — nothing grants credits directly. An existing customer is left exactly as
+it is, on whatever plan it already has.
 
-| Step                       | Needs governance? | What it does                                                                     |
-| -------------------------- | ----------------- | -------------------------------------------------------------------------------- |
-| 1. customer                | no                | creates it if missing                                                            |
-| 2. credit pool             | no                | grants credits when the balance is below `--pool-min`, guarded by a balance read |
-| 3. entity types + entities | **yes**           | `team` (attribution key `teamId`) and `agent` (`agentId`)                        |
-| 4. assignments             | **yes**           | One agent per example, each = 5 per `P1M`, all parented to `team-research`       |
+| Step                     | Needs governance? | What it does                                                                                 |
+| ------------------------ | ----------------- | -------------------------------------------------------------------------------------------- |
+| 1. currency or feature   | no                | creates the credit currency, or the metered feature, the demo gates on, if missing          |
+| 2. demo plan             | no                | a free plan (`AGENT_SDK_DEMO_PLAN_ID`) under its own product, granting 10,000 credits a month — or the feature — published; an existing plan is never rewritten |
+| 3. entity types          | **yes**           | `team` (`teamId`), `agent` (`agentId`), and `model` (`model`, for budgets per model)        |
+| 4. team, agents, budgets | **yes**           | through `stigg.register` with the demo plan — the first one provisions the customer         |
+
+Two things the API cannot set, and so the seed cannot either: **credit rates for vendor metrics**
+(how many credits an `input_tokens` costs lives on a plan's charges), and **raw-events meters**.
+Offline the mock carries both; against a real account, an example that reports vendor metrics
+against a currency meters them but drains nothing until the plan prices them — the SDK says so on
+the first report.
 
 Each example registers **its own agent** — `agent-support-bot-anthropic`, `-openai`, `-gemini`, `-openrouter`,
 `-litellm`, and the base `agent-support-bot` for the gateway examples. Budgets attach to the agent, so
@@ -1145,8 +1157,8 @@ team-research (team) usage=0/30
   agent-support-bot-litellm    usage=0/5
 ```
 
-**The client examples provision their own agent** — the seed prepares the account (entity types,
-the parent team, a funded pool). That is the more realistic split: an admin sets up the account, an
+**The client examples provision their own agent** — the seed prepares the account (the currency,
+the demo plan, entity types, the parent team). That is the more realistic split: an admin sets up the account, an
 application provisions its own agents at runtime. `register()` carries it:
 
 One caveat about the cap, because the two halves can overlap. `apply: 'on-create'` is exactly that
@@ -1215,6 +1227,8 @@ there (or exporting it in your shell) overrides the fixture without editing `dem
 | -------------------------------------- | ---------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
 | `AGENT_SDK_ANTHROPIC_API_KEY`          | — (falls back to `ANTHROPIC_API_KEY`)    | Layers 1 and 3                                                                                                                       |
 | `AGENT_SDK_ANTHROPIC_MODEL`            | `claude-opus-5`                          | Claude model for layers 1 and 3                                                                                                      |
+| `AGENT_SDK_ANTHROPIC_FALLBACK_MODEL`   | `claude-haiku-5-5`                       | The cheaper model the LangGraph model-fallback example switches to                                                                   |
+| `AGENT_SDK_DEMO_PLAN_ID`               | `plan-agent-sdk-demo`                    | The free plan a new customer is provisioned onto; the examples create it if missing. Blank: nobody is provisioned                    |
 | `AGENT_SDK_OPENAI_API_KEY`             | — (falls back to `OPENAI_API_KEY`)       | The OpenAI client example                                                                                                            |
 | `AGENT_SDK_OPENAI_MODEL`               | `gpt-5`                                  | Model for the OpenAI client example                                                                                                  |
 | `AGENT_SDK_GROQ_API_KEY`               | — (falls back to `GROQ_API_KEY`)         | The Groq client example. Blank ⇒ the offline mock                                                                                     |
@@ -1313,7 +1327,8 @@ Stigg account.
 | `example-client-typesafe`   | [`client/typesafe.ts`](../examples/client/typesafe.ts)                 | A non-chat client: typed questions, batched or one per call. **Needs a real TypeSafe key**                  |
 | `example-two-agents`        | [`client/two-agents.ts`](../examples/client/two-agents.ts)             | Two agents, one team: a sibling denied by its own cap, then the survivor denied by the team above it        |
 | `example-orchestrator-langchain` | [`orchestrator/langchain.ts`](../examples/orchestrator/langchain.ts) | A multi-agent orchestrator chat: a lead LangChain agent delegating to a researcher and a writer held as tools, governed by one `StiggLangChainCallbackHandler`, each agent as itself. The researcher searches until Stigg refuses it, then the lead takes another pass with a generalist answering from general knowledge. Every agent is registered under one parent agent, `agent-orchestrator`, whose budget caps the graph |
-| `example-orchestrator-langgraph` | [`orchestrator/langgraph.ts`](../examples/orchestrator/langgraph.ts) | The same chat as a hand-built LangGraph `StateGraph`, one node per agent. The Stigg integration is the LangChain example's word for word; a refused researcher is routed to the generalist by a graph edge |
+| `example-orchestrator-langgraph-handoff` | [`orchestrator/langgraph-handoff.ts`](../examples/orchestrator/langgraph-handoff.ts) | Agents handing work to each other: the same chat as a hand-built LangGraph `StateGraph`, one node per agent. The Stigg integration is the LangChain example's word for word; a refused researcher is routed to the generalist by a graph edge |
+| `example-orchestrator-langgraph-model-fallback` | [`orchestrator/langgraph-model-fallback.ts`](../examples/orchestrator/langgraph-model-fallback.ts) | One agent in one node, with a budget per model: Opus's small and dear, Haiku's large and cheap, each scoped to its model, and every call reported with its model as a dimension. When Stigg refuses Opus, the node answers with Haiku in the same turn; the next turn tries Opus first again |
 | `example-gateway-openrouter`| [`gateway/openrouter.ts`](../examples/gateway/openrouter.ts)           | The two gateway topologies: calling one gates, operating one only ingests. `example-gateway` runs this one  |
 | `example-gateway-litellm`   | [`gateway/litellm.ts`](../examples/gateway/litellm.ts)                 | The same two topologies when the cost is in a header: real spend, then tokens, from one request             |
 | `example-gateway-bedrock`   | [`gateway/bedrock.ts`](../examples/gateway/bedrock.ts)                 | A gateway that states no price: tokens are all there is to meter, and nothing proxies it                    |

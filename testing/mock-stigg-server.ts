@@ -51,12 +51,19 @@ type Assignment = {
   usageLimit: number | null;
   cadence: string;
   parentId: string | null;
+  /**
+   * A dimension-scoped budget: it applies, and counts usage, only when every one of these entities
+   * is in the request's resolved set. Empty is the entity's whole budget.
+   */
+  scopeEntityIds: string[];
 };
 
 type CustomerState = {
   entities: Map<string, Entity>;
   assignments: Map<string, Assignment>;
   usageByEntity: Map<string, number>;
+  /** What each scoped budget has counted, by assignment key - only the usage its scope matched. */
+  usageByAssignment: Map<string, number>;
   pool: { usageLimit: number; currentUsage: number };
   seenKeys: Set<string>;
 };
@@ -112,6 +119,8 @@ export type MockState = {
   eventAggregates: Map<string, { max: number; unique: Set<string> }>;
   entityWrites: Entity[];
   assignmentWrites: Assignment[];
+  /** Every page of assignments served, by its `after` cursor - the first page has none. */
+  assignmentPages: (string | null)[];
   archived: string[];
   /**
    * Every provisioning the SDK asked for, in order - including the ones refused as duplicates. The
@@ -120,6 +129,21 @@ export type MockState = {
   provisionAttempts: string[];
   /** Every subscription a customer was actually provisioned with, in order. */
   subscriptionWrites: { customerId: string; planId: string }[];
+  /** The catalog an example seeds: features by id, products, and plans with their entitlements. */
+  features: Map<string, { id: string; displayName: string; featureType: string; meterType?: string }>;
+  products: Map<string, { id: string; displayName: string }>;
+  plans: Map<string, MockPlan>;
+};
+
+/** A plan, as far as provisioning cares: whether it is live, and what it grants a subscriber. */
+type MockPlan = {
+  id: string;
+  displayName: string;
+  productId: string;
+  pricingType: string | null;
+  status: 'DRAFT' | 'PUBLISHED' | 'ARCHIVED';
+  metadata: Record<string, string>;
+  entitlements: { type: 'CREDIT' | 'FEATURE'; id: string; amount?: number | null; usageLimit?: number | null }[];
 };
 
 const newState = (): MockState => ({
@@ -130,9 +154,13 @@ const newState = (): MockState => ({
   dimensionsSeen: [],
   creditRates: new Map(),
   currencies: new Set(['credits']),
+  features: new Map(),
+  products: new Map(),
+  plans: new Map(),
   usageByFeature: new Map(),
   entityWrites: [],
   assignmentWrites: [],
+  assignmentPages: [],
   archived: [],
   provisionAttempts: [],
   subscriptionWrites: [],
@@ -145,6 +173,7 @@ const customer = (mock: MockState, id: string): CustomerState => {
       entities: new Map(),
       assignments: new Map(),
       usageByEntity: new Map(),
+      usageByAssignment: new Map(),
       pool: { usageLimit: 0, currentUsage: 0 },
       seenKeys: new Set(),
     };
@@ -209,20 +238,38 @@ export function seedBudget(
     usageLimit: number | null;
     cadence?: string;
     parentId?: string | null;
+    scopeEntityIds?: string[];
   },
 ): void {
   const state = customer(mock, customerId);
+  const scopeEntityIds = input.scopeEntityIds ?? [];
   state.entities.set(input.entityId, { id: input.entityId, entityTypeId: input.entityTypeId ?? 'agent' });
-  state.assignments.set(assignmentKey(input.entityId, input.capabilityId), {
+  state.assignments.set(assignmentKey(input.entityId, input.capabilityId, scopeEntityIds), {
     entityId: input.entityId,
     capabilityId: input.capabilityId,
     usageLimit: input.usageLimit,
     cadence: input.cadence ?? 'P1M',
     parentId: input.parentId ?? null,
+    scopeEntityIds,
   });
 }
 
-const assignmentKey = (entityId: string, capabilityId: string) => `${entityId}::${capabilityId}`;
+/** The mock's default page of assignments - small, so a test crosses pages with a few dozen. */
+const ASSIGNMENTS_PAGE_SIZE = 20;
+
+/** An assignment is one `(entity, capability, scope)` triple, as Stigg keys it. */
+const assignmentKey = (entityId: string, capabilityId: string, scopeEntityIds: string[] = []) =>
+  scopeEntityIds.length
+    ? `${entityId}::${capabilityId}::${JSON.stringify([...scopeEntityIds].sort())}`
+    : `${entityId}::${capabilityId}`;
+
+/** An entity's assignments for one capability, every scope. */
+const assignmentsFor = (state: CustomerState, entityId: string, capabilityId: string): Assignment[] =>
+  [...state.assignments.values()].filter((a) => a.entityId === entityId && a.capabilityId === capabilityId);
+
+/** Whether a scoped budget applies to a request: every entity it is scoped to was resolved. */
+const inScope = (assignment: Assignment, resolved: ReadonlySet<string>) =>
+  assignment.scopeEntityIds.every((id) => resolved.has(id));
 const isTruthy = (value: string | undefined) => ['1', 'true', 'yes'].includes((value ?? '').toLowerCase());
 
 // ----------------------------------------------------------------------------------------
@@ -232,7 +279,9 @@ const isTruthy = (value: string | undefined) => ['1', 'true', 'yes'].includes((v
 /**
  * The entity a request attributes to. Several dimensions can match at once - a request usually
  * carries both the agent and its team - and the subject is the deepest of them, because the
- * shallower ones are already on its chain.
+ * shallower ones are already on its chain. A dimensional entity - one a budget is scoped by, a
+ * model - is matched too, but scopes the subject's budgets rather than being it: at equal depth,
+ * an unparented agent beside its model, the tree's own entity is the subject.
  */
 function resolveEntity(
   mock: MockState,
@@ -240,16 +289,30 @@ function resolveEntity(
   dimensions: Record<string, string>,
   capabilityId: string,
 ): Entity | undefined {
-  const candidates: Entity[] = [];
+  const scopes = new Set([...state.assignments.values()].flatMap((a) => a.scopeEntityIds));
+  const isScope = (entity: Entity) => (scopes.has(entity.id) ? 1 : 0);
+  return matchedEntities(mock, state, dimensions).sort(
+    (a, b) =>
+      chainOf(state, b, capabilityId).length - chainOf(state, a, capabilityId).length || isScope(a) - isScope(b),
+  )[0];
+}
+
+/** Every entity a request's dimensions name - by an attribution key of the entity's type. */
+function matchedEntities(mock: MockState, state: CustomerState, dimensions: Record<string, string>): Entity[] {
+  const matched: Entity[] = [];
   for (const type of mock.entityTypes.values()) {
     for (const key of type.attributionKeys) {
       const value = dimensions[key];
       const entity = value ? state.entities.get(value) : undefined;
-      if (entity && !entity.archivedAt) candidates.push(entity);
+      if (entity && !entity.archivedAt && entity.entityTypeId === type.id) matched.push(entity);
     }
   }
-  return candidates.sort((a, b) => chainOf(state, b, capabilityId).length - chainOf(state, a, capabilityId).length)[0];
+  return matched;
 }
+
+/** The request's resolved set: the attributed entity's chain, and every entity a dimension names. */
+const resolvedSet = (mock: MockState, state: CustomerState, dimensions: Record<string, string>, chain: Entity[]) =>
+  new Set([...chain, ...matchedEntities(mock, state, dimensions)].map((entity) => entity.id));
 
 /** Root -> leaf, following parentId off the assignments, which is where placement lives. */
 function chainOf(state: CustomerState, leaf: Entity, capabilityId: string): Entity[] {
@@ -260,30 +323,49 @@ function chainOf(state: CustomerState, leaf: Entity, capabilityId: string): Enti
   while (current && !guard.has(current.id)) {
     guard.add(current.id);
     chain.unshift(current);
-    const parentId: string | null | undefined = state.assignments.get(
-      assignmentKey(current.id, capabilityId),
+    // Placement is per entity, so any of its assignments for the capability carries the parent.
+    const parentId: string | null | undefined = (
+      state.assignments.get(assignmentKey(current.id, capabilityId)) ??
+      assignmentsFor(state, current.id, capabilityId)[0]
     )?.parentId;
     current = parentId ? state.entities.get(parentId) : undefined;
   }
   return chain;
 }
 
-function chainNodes(state: CustomerState, chain: Entity[], capabilityId: string, requested: number) {
-  return chain
-    .map((entity) => ({ entity, assignment: state.assignments.get(assignmentKey(entity.id, capabilityId)) }))
-    .filter((pair): pair is { entity: Entity; assignment: Assignment } => Boolean(pair.assignment))
-    .map(({ entity, assignment }) => {
-      const currentUsage = state.usageByEntity.get(entity.id) ?? 0;
-      return {
-        entityId: entity.id,
-        // A null limit counts usage but never blocks - the observe-only rollout.
-        isGranted: assignment.usageLimit === null || currentUsage + requested <= assignment.usageLimit,
-        usageLimit: assignment.usageLimit,
-        currentUsage,
-        scopeEntityIds: [] as string[],
-      };
-    });
+function chainNodes(
+  state: CustomerState,
+  chain: Entity[],
+  capabilityId: string,
+  requested: number,
+  resolved: ReadonlySet<string>,
+) {
+  // Every budget on the chain that applies to this request: an entity's whole one, and each scoped
+  // one whose scope the request resolved - the per-model budget for the model it named.
+  return chain.flatMap((entity) =>
+    assignmentsFor(state, entity.id, capabilityId)
+      .filter((assignment) => inScope(assignment, resolved))
+      .map((assignment) => {
+        const currentUsage = usageOf(state, assignment);
+        return {
+          entityId: entity.id,
+          // A null limit counts usage but never blocks - the observe-only rollout.
+          isGranted: assignment.usageLimit === null || currentUsage + requested <= assignment.usageLimit,
+          usageLimit: assignment.usageLimit,
+          currentUsage,
+          scopeEntityIds: assignment.scopeEntityIds,
+        };
+      }),
+  );
 }
+
+/** What a budget has counted: the entity's whole usage, or - scoped - only what its scope matched. */
+const usageOf = (state: CustomerState, assignment: Assignment) =>
+  assignment.scopeEntityIds.length
+    ? (state.usageByAssignment.get(
+        assignmentKey(assignment.entityId, assignment.capabilityId, assignment.scopeEntityIds),
+      ) ?? 0)
+    : (state.usageByEntity.get(assignment.entityId) ?? 0);
 
 // ----------------------------------------------------------------------------------------
 // Request plumbing
@@ -329,6 +411,17 @@ function readDimensions(query: URLSearchParams): Record<string, string> {
 
 const capabilityOf = (query: URLSearchParams) => query.get('currencyId') ?? query.get('featureId') ?? '';
 
+/**
+ * Whether a feature is entitled by the plan the customer was provisioned onto. Only a plan in the
+ * mock's catalog says so: a customer seeded directly, or on a plan the catalog does not hold, is
+ * taken as entitled - which is how every feature-mode run worked before plans were seeded.
+ */
+function planGrantsFeature(mock: MockState, customerId: string, featureId: string): boolean {
+  const planId = mock.subscriptionWrites.find((write) => write.customerId === customerId)?.planId;
+  const plan = planId ? mock.plans.get(planId) : undefined;
+  return !plan || plan.entitlements.some((granted) => granted.type === 'FEATURE' && granted.id === featureId);
+}
+
 // ----------------------------------------------------------------------------------------
 // Routes
 // ----------------------------------------------------------------------------------------
@@ -340,22 +433,32 @@ function checkResponse(mock: MockState, customerId: string, query: URLSearchPara
   const dimensions = readDimensions(query);
 
   const leaf = resolveEntity(mock, state, dimensions, capabilityId);
-  const nodes = leaf ? chainNodes(state, chainOf(state, leaf, capabilityId), capabilityId, requested) : [];
+  const chain = leaf ? chainOf(state, leaf, capabilityId) : [];
+  const nodes = leaf
+    ? chainNodes(state, chain, capabilityId, requested, resolvedSet(mock, state, dimensions, chain))
+    : [];
 
   // Only a credit check is drawn from the wallet. A feature is entitled by a subscription and
   // capped by its assignment, so gating one on the pool denied every feature-mode run offline -
   // the pool is funded for credit entitlements and stays at zero otherwise.
   const isCredit = query.get('currencyId') !== null;
   const poolGranted = !isCredit || state.pool.currentUsage + requested <= state.pool.usageLimit;
+  const planGranted = isCredit || planGrantsFeature(mock, customerId, capabilityId);
   const chainGranted = nodes.every((node) => node.isGranted);
-  const isGranted = poolGranted && chainGranted;
+  const isGranted = poolGranted && planGranted && chainGranted;
 
   return {
     data: {
       type: query.get('currencyId') ? 'CREDIT' : 'FEATURE',
       isGranted,
       // The pool running dry and an admin-set cap are different products - keep them distinct.
-      accessDeniedReason: isGranted ? null : !poolGranted ? 'InsufficientCredits' : 'BudgetExceeded',
+      accessDeniedReason: isGranted
+        ? null
+        : !poolGranted
+          ? 'InsufficientCredits'
+          : !planGranted
+            ? 'NoFeatureEntitlementInSubscription'
+            : 'BudgetExceeded',
       ...(query.get('currencyId') ? { currency: { currencyId: capabilityId, displayName: capabilityId } } : {}),
       usageLimit: state.pool.usageLimit,
       currentUsage: state.pool.currentUsage,
@@ -405,9 +508,17 @@ function applyUsage(
     const leaf = resolveEntity(mock, state, dimensions ?? {}, capabilityId);
     // Usage rolls up the whole chain at once - that is what one dimensions map buys.
     if (leaf) {
-      for (const entity of chainOf(state, leaf, capabilityId)) {
+      const chain = chainOf(state, leaf, capabilityId);
+      const resolved = resolvedSet(mock, state, dimensions ?? {}, chain);
+      for (const entity of chain) {
         const spent = (state.usageByEntity.get(entity.id) ?? 0) + credits;
         state.usageByEntity.set(entity.id, Math.round(spent * 1e4) / 1e4);
+        // And each scoped budget the request's scope matched, on its own counter.
+        for (const assignment of assignmentsFor(state, entity.id, capabilityId)) {
+          if (!assignment.scopeEntityIds.length || !inScope(assignment, resolved)) continue;
+          const key = assignmentKey(assignment.entityId, capabilityId, assignment.scopeEntityIds);
+          state.usageByAssignment.set(key, Math.round(((state.usageByAssignment.get(key) ?? 0) + credits) * 1e4) / 1e4);
+        }
       }
     }
   }
@@ -515,7 +626,7 @@ function governanceTree(mock: MockState, customerId: string, query: URLSearchPar
   const rows = [...state.assignments.values()]
     .filter((assignment) => wanted.length === 0 || wanted.includes(assignment.capabilityId))
     .map((assignment) => {
-      const currentUsage = state.usageByEntity.get(assignment.entityId) ?? 0;
+      const currentUsage = usageOf(state, assignment);
       return {
         entityId: assignment.entityId,
         entityTypeId: state.entities.get(assignment.entityId)?.entityTypeId ?? '',
@@ -525,7 +636,7 @@ function governanceTree(mock: MockState, customerId: string, query: URLSearchPar
         currentUsage,
         utilization: assignment.usageLimit ? currentUsage / assignment.usageLimit : 0,
         cadence: assignment.cadence,
-        scopeEntityIds: [],
+        scopeEntityIds: assignment.scopeEntityIds,
         currencyId: assignment.capabilityId,
       };
     });
@@ -555,10 +666,16 @@ function graphql(mock: MockState, body: any, provisionDecision = 'REQUESTED_PLAN
         errors: [{ message: 'customer already exists', extensions: { code: 'DuplicatedEntityNotAllowed' } }],
       };
     }
-    customer(mock, refId);
+    const created = customer(mock, refId);
     const requested = provisionDecision;
     const planId = requested === 'REQUESTED_PLAN' ? subscriptionParams?.planId : 'plan-predefined';
     if (planId) mock.subscriptionWrites.push({ customerId: refId, planId });
+    // What the plan grants a subscriber arrives with the subscription: its credits fund the pool.
+    for (const entitlement of (planId && mock.plans.get(planId)?.entitlements) || []) {
+      if (entitlement.type !== 'CREDIT' || !entitlement.amount) continue;
+      created.pool.usageLimit += entitlement.amount;
+      mock.currencies.add(entitlement.id);
+    }
     const now = new Date().toISOString();
     // Every field the mutation selects, even as null: Apollo logs each one a response leaves out.
     const slimCustomer = {
@@ -857,6 +974,11 @@ function route(server: MockStiggServer, req: IncomingMessage, res: ServerRespons
   if (betaCustomer) {
     const customerId = decodeURIComponent(betaCustomer[1]!);
     const rest = betaCustomer[2] ?? '';
+    // An entity is created under a customer, so one Stigg has never seen is refused.
+    if (server.strictCustomers && rest === '/entities' && method === 'PUT' && !mock.customers.has(customerId)) {
+      send(res, 404, { code: 'CustomerNotFound', message: `Customer ${customerId} not found` });
+      return;
+    }
     const state = customer(mock, customerId);
 
     if (rest === '/entities' && method === 'PUT') {
@@ -886,13 +1008,22 @@ function route(server: MockStiggServer, req: IncomingMessage, res: ServerRespons
           (!entityId || assignment.entityId === entityId) &&
           (!capabilityId || assignment.capabilityId === capabilityId),
       );
-      send(res, 200, { data: matches, pagination: {} });
+      // Paged by cursor, as the API is - so a reader that stops at the first page misses the rest.
+      const after = query.get('after');
+      const start = after ? Number(after) : 0;
+      const end = start + (Number(query.get('limit')) || ASSIGNMENTS_PAGE_SIZE);
+      mock.assignmentPages.push(after);
+      send(res, 200, {
+        data: matches.slice(start, end),
+        pagination: end < matches.length ? { next: String(end) } : {},
+      });
       return;
     }
     if (rest === '/assignments' && method === 'PUT') {
       for (const input of body.assignments ?? []) {
         const capabilityId = input.currencyId ?? input.featureId;
-        const key = assignmentKey(input.entityId, capabilityId);
+        const scopeEntityIds: string[] = input.scopeEntityIds ?? [];
+        const key = assignmentKey(input.entityId, capabilityId, scopeEntityIds);
         const existing = state.assignments.get(key);
         const written: Assignment = {
           entityId: input.entityId,
@@ -901,6 +1032,7 @@ function route(server: MockStiggServer, req: IncomingMessage, res: ServerRespons
           usageLimit: input.usageLimit === undefined ? (existing?.usageLimit ?? null) : input.usageLimit,
           cadence: input.cadence ?? existing?.cadence ?? 'P1M',
           parentId: input.parentId === undefined ? (existing?.parentId ?? null) : input.parentId,
+          scopeEntityIds,
         };
         state.assignments.set(key, written);
         mock.assignmentWrites.push(written);
@@ -1004,6 +1136,103 @@ function route(server: MockStiggServer, req: IncomingMessage, res: ServerRespons
     } catch (err) {
       send(res, (err as { status?: number }).status ?? 500, { code: 'BadRequest', message: (err as Error).message });
     }
+    return;
+  }
+
+  // The catalog the examples seed: read first, created when missing.
+  if (path === '/api/v1/credits/custom-currencies') {
+    if (method === 'POST' && mock.currencies.has(body.id)) {
+      send(res, 409, { code: 'DuplicatedEntityNotAllowed', message: 'currency already exists' });
+      return;
+    }
+    if (method === 'POST') mock.currencies.add(body.id);
+    const listed = [...mock.currencies].map((id) => ({ id, displayName: id, archivedAt: null }));
+    send(
+      res,
+      200,
+      method === 'POST' ? { data: listed.find((c) => c.id === body.id) } : { data: listed, pagination: {} },
+    );
+    return;
+  }
+  const feature = /^\/api\/v1\/features(?:\/([^/]+))?$/.exec(path);
+  if (feature) {
+    if (method === 'POST' && mock.features.has(body.id)) {
+      send(res, 409, { code: 'DuplicatedEntityNotAllowed', message: 'feature already exists' });
+      return;
+    }
+    if (method === 'POST') {
+      mock.features.set(body.id, {
+        id: body.id,
+        displayName: body.displayName,
+        featureType: body.featureType,
+        meterType: body.meterType,
+      });
+      send(res, 200, { data: mock.features.get(body.id) });
+      return;
+    }
+    const found = feature[1] ? mock.features.get(decodeURIComponent(feature[1])) : undefined;
+    if (found) send(res, 200, { data: found });
+    else send(res, 404, { code: 'FeatureNotFound', message: 'feature not found' });
+    return;
+  }
+  if (path === '/api/v1/products') {
+    if (method === 'POST' && mock.products.has(body.id)) {
+      send(res, 409, { code: 'DuplicatedEntityNotAllowed', message: 'product already exists' });
+      return;
+    }
+    if (method === 'POST') mock.products.set(body.id, { id: body.id, displayName: body.displayName });
+    send(
+      res,
+      200,
+      method === 'POST' ? { data: mock.products.get(body.id) } : { data: [...mock.products.values()], pagination: {} },
+    );
+    return;
+  }
+  const plan = /^\/api\/v1\/plans(?:\/([^/]+))?(\/entitlements|\/publish)?$/.exec(path);
+  if (plan) {
+    const planId = plan[1] ? decodeURIComponent(plan[1]) : undefined;
+    if (!planId && method === 'POST' && mock.plans.has(body.id)) {
+      send(res, 409, { code: 'DuplicatedEntityNotAllowed', message: 'plan already exists' });
+      return;
+    }
+    if (!planId && method === 'POST') {
+      const created: MockPlan = {
+        id: body.id,
+        displayName: body.displayName,
+        productId: body.productId,
+        pricingType: body.pricingType ?? null,
+        status: body.status ?? 'DRAFT',
+        metadata: body.metadata ?? {},
+        entitlements: [],
+      };
+      mock.plans.set(created.id, created);
+      send(res, 200, { data: created });
+      return;
+    }
+    const found = planId ? mock.plans.get(planId) : undefined;
+    if (!found) {
+      send(res, 404, { code: 'PlanNotFound', message: 'plan not found' });
+      return;
+    }
+    if (plan[2] === '/entitlements' && method === 'POST') {
+      // One row per entitlement: a second create of the same one is refused, as a duplicate
+      // currency or feature is - what a seed racing another has to settle itself.
+      const granted = (e: { type: string; id: string }) =>
+        found.entitlements.some((have) => have.type === e.type && have.id === e.id);
+      if ((body.entitlements ?? []).some(granted)) {
+        send(res, 409, { code: 'DuplicatedEntityNotAllowed', message: 'entitlement already exists' });
+        return;
+      }
+      found.entitlements.push(...(body.entitlements ?? []));
+      send(res, 200, { data: found.entitlements });
+      return;
+    }
+    if (plan[2] === '/publish' && method === 'POST') {
+      found.status = 'PUBLISHED';
+      send(res, 200, { data: { taskId: 'publish-task' } });
+      return;
+    }
+    send(res, 200, { data: found });
     return;
   }
 

@@ -20,7 +20,7 @@ import { StiggAgentSDK, entitlementId, weightedMetrics } from '../../../src';
 import type { IngestResult } from '../../../src';
 import { maybeStartMockServer } from '../../shared/mock-server';
 import { maybeStartMockStiggServer } from '../../shared/mock-stigg-server';
-import { seedMock } from '../../shared/setup-governance';
+import { prepareDemo } from '../../shared/setup-governance';
 import { agentIdFor, describeSetup, requireFixture, resolveDemoEnv } from '../../shared/demo-env';
 import { requireKey, resolveStiggEnv } from '../../shared/stigg-env';
 import { startGovernedProxy } from './proxy';
@@ -88,22 +88,18 @@ export async function runGateway(vendor: GatewayVendor): Promise<void> {
   const env = resolveStiggEnv();
   const demoEnv = resolveDemoEnv(env);
   const stiggMock = await maybeStartMockStiggServer(env.offline);
-  if (stiggMock) {
-    await seedMock(demoEnv, stiggMock, {
-      // The account's setup, not the agent: this example provisions its own below, with the same
-      // budget, so the offline path and a real account take the same route in.
-      agents: [],
-      teamLimit: vendor.budget * 2,
-      // The pool must dwarf the per-agent budget, or a denial would come from an empty wallet.
-      poolMin: vendor.budget * 4,
-      log: () => undefined,
-    });
-  }
 
   console.log(`[governance] ${describeSetup(env, demoEnv)}`);
   const stigg = stiggMock
     ? new StiggAgentSDK({ baseUrl: stiggMock.baseUrl })
     : new StiggAgentSDK({ apiKey: requireKey(env), baseUrl: env.baseUrl });
+  // The account's setup, created if missing - not the agent: this example provisions its own
+  // below, so the offline path and a real account take the same route in.
+  await prepareDemo(env, demoEnv, stigg, stiggMock, {
+    agents: [],
+    teamLimit: vendor.budget * 2,
+    log: (line) => console.log(`[setup]${line}`),
+  });
   const baseUrl = mock ? vendor.mockBaseUrl(mock.baseUrl) : vendor.baseUrl;
 
   // This example's subject is a budget visibly draining and then refusing, and `vendor.budget` is
@@ -125,6 +121,7 @@ export async function runGateway(vendor: GatewayVendor): Promise<void> {
   if (agentId && demoEnv.agentType) {
     await stigg.register({
       customerId: demoEnv.customerId,
+      defaultPlanId: demoEnv.planId,
       agentId,
       entityTypeId: demoEnv.agentType.entityTypeId,
       displayName: `${vendor.label} caller`,
@@ -132,13 +129,11 @@ export async function runGateway(vendor: GatewayVendor): Promise<void> {
       // undefined would mean "leave whatever parent it already has".
       //
       // The limit and the cadence are what make this a budget rather than a bare placement, and
-      // governance requires both whenever it *creates* an assignment. Omitting them worked only
-      // against the offline mock, where `seedMock` above has already written the assignment and
-      // this call is therefore an update; against a real Stigg the first run for an agent is a
-      // create, and it was refused with a 400 that said only "Bad Request".
+      // governance requires both whenever it *creates* an assignment - which the first run for an
+      // agent is, and a create without them is refused with a 400 that says only "Bad Request".
       //
-      // `on-create` rather than the default `always`: this is the same number `seedMock` seeds
-      // with, so re-running the example must not overwrite a budget an admin has since changed.
+      // `on-create` rather than the default `always`: re-running the example must not overwrite a
+      // budget an admin has since changed.
       ...(demoEnv.entitlement
         ? {
             budget: {
@@ -163,6 +158,7 @@ export async function runGateway(vendor: GatewayVendor): Promise<void> {
       recipe: vendor.recipe(baseUrl),
       stiggContext: {
         customerId: demoEnv.customerId,
+        defaultPlanId: demoEnv.planId,
         agentId,
         attributionKey: demoEnv.agentType?.attributionKey,
         entitlement,

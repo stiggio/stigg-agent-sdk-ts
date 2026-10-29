@@ -138,6 +138,7 @@ describe('the published surface', () => {
   it('exports exactly what the LangChain entry point promises', () => {
     assert.deepEqual(Object.keys(langchainSurface).sort(), [
       'AccessDeniedError',
+      'CONTEXT_METADATA_KEY',
       'CUSTOMER_METADATA_KEY',
       'StiggLangChainCallbackHandler',
       'isAccessDenied',

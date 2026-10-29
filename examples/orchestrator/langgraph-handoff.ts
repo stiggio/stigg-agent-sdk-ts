@@ -1,5 +1,5 @@
 /**
- * Layer 3: the same governed multi-agent chat as the LangChain example, as a hand-built LangGraph.
+ * Layer 3: agents handing work to each other - the LangChain example's chat, as a hand-built LangGraph.
  *
  *   START -> lead (writes the brief) -> researcher <-> tools (paid search)
  *                                         |- refused by Stigg -> generalist -\
@@ -11,13 +11,14 @@
  * whose model called it. A refusal is routed by the graph itself: the researcher node records it,
  * and an edge sends the turn to the generalist instead of the writer.
  *
- * Run:  yarn example-orchestrator-langgraph
+ * Run:  yarn example-orchestrator-langgraph-handoff
  */
 import { AIMessage, HumanMessage, SystemMessage, ToolMessage, type BaseMessage } from '@langchain/core/messages';
 import type { RunnableConfig } from '@langchain/core/runnables';
 import type { StructuredToolInterface } from '@langchain/core/tools';
 import { Annotation, END, START, StateGraph, messagesStateReducer } from '@langchain/langgraph';
 import {
+  HANDOFF_CAST,
   MAX_CALLS_PER_TOOL,
   PROMPTS,
   anotherPass,
@@ -44,7 +45,7 @@ type TurnState = typeof Turn.State;
 
 const replies = (messages: BaseMessage[]) => messages.filter((m): m is AIMessage => AIMessage.isInstance(m));
 
-startOrchestratorChat('LangGraph', ({ stigg, model, search }) => {
+startOrchestratorChat('LangGraph', HANDOFF_CAST, ({ stigg, model, search }) => {
   const researcherModel = model.bindTools([search]);
 
   /** An agent that is one model call: start, answer, done. */

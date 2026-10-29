@@ -2,10 +2,10 @@
  * The LangChain and LangGraph binding: a callback handler over an agent graph's middleware.
  *
  *   const stiggHandler = new StiggLangChainCallbackHandler({ stigg, stiggContext, agents });
- *   await agent.invoke(input, { callbacks: [stiggHandler], metadata: { stiggCustomerId } });
+ *   await agent.invoke(input, { callbacks: [stiggHandler], metadata: { stiggContext: { customerId } } });
  *
- * Everything here is LangChain's protocol - which hook a step starts on, where the customer and
- * the usage are, which agent a step belongs to. Whether a step may run and what it is worth is the
+ * Everything here is LangChain's protocol - which hook a step starts on, where the run's
+ * `stiggContext` and the usage are, which agent a step belongs to. Whether a step may run and what it is worth is the
  * middleware's. LangChain hands a callback to every run beneath the `invoke`, sub-agents and
  * LangGraph nodes included, so one handler governs the whole graph.
  *
@@ -13,7 +13,7 @@
  * `createReactAgent` by its `name`, a hand-built graph's node by its own. That is LangChain's run
  * tree, not metadata - `lc_agent_name` in metadata is inherited by an unnamed sub-agent, carried
  * into a sub-agent by a tool that passes its own config, and settable by whoever sends the run's
- * metadata, so it would bill the wrong agent or let a client pick whose budget pays.
+ * metadata, so it would charge the wrong agent or let a client pick whose budget pays.
  *
  * It blocks by default. LangChain swallows a handler's error unless `raiseError` is set, and runs
  * an async handler in the background unless `awaitHandlers` is set too, so both are set - through
@@ -30,16 +30,30 @@ import { normalizeUsage } from '../../shared/token-usage';
 import type { StiggAgentSDK } from '../../../stigg-agent-sdk';
 import type { GovernedAgentMiddleware, Measurement, Metrics, MiddlewareOptions } from '../../../types';
 import type { StepAttribution } from '../core/agent-middleware';
+import type { StiggContext } from '../../../core/context';
 
 /**
- * The metadata key a caller names the customer under, on `invoke(input, { metadata })`. It wins
- * over the handler's default, so set it server-side - on LangGraph Platform the client sends
- * `metadata`, so set it in your auth handler, never from the request.
+ * The metadata key a run states its `stiggContext` under, on `invoke(input, { metadata })` - the
+ * same override `wrap` takes per call, applied over the handler's and the agent's. On `invoke` it
+ * names only the customer and `correlationId` (`RUN_FIELDS`); a node's own config may state more.
+ * On LangGraph Platform the client sends `metadata`, so set the customer in your auth handler,
+ * never from the request.
  */
+export const CONTEXT_METADATA_KEY = 'stiggContext';
+
+/**
+ * What the `stiggContext` of a run with no parent - `invoke`'s own metadata - may state. On LangGraph
+ * Platform the request's client writes that metadata, so it names who the run is for and nothing that
+ * prices it or says which agent it is. The rest belongs on the handler, under `agents`, or in a
+ * node's own config.
+ */
+const RUN_FIELDS: ReadonlySet<string> = new Set(['customerId', 'correlationId']);
+
+/** @deprecated The customer alone, from before a run took a whole `stiggContext`. Read as `stiggContext.customerId`. */
 export const CUSTOMER_METADATA_KEY = 'stiggCustomerId';
 
 /**
- * What `createAgent({ name })` and LangGraph stamp in metadata. Never what a step is billed as -
+ * What `createAgent({ name })` and LangGraph stamp in metadata. Never what a step is reported as -
  * see the top of this file - only the label an unlisted agent is reported under.
  */
 const AGENT_METADATA_KEY = 'lc_agent_name';
@@ -53,7 +67,7 @@ const LANGCHAIN_METRICS = ['input_tokens', 'output_tokens', 'total_tokens'] as c
 
 /** Where a caller puts the customer, for the refusal a step with none raises. */
 const MISSING_CUSTOMER =
-  `Name it on every run as \`invoke(input, { metadata: { ${CUSTOMER_METADATA_KEY}: customerId } })\`, ` +
+  `Name it on every run as \`invoke(input, { metadata: { ${CONTEXT_METADATA_KEY}: { customerId } } })\`, ` +
   'or give the handler a default in its `stiggContext: { customerId }`.';
 
 export type StiggLangChainCallbackOptions = MiddlewareOptions & {
@@ -84,7 +98,7 @@ type LLMResult = {
  * agent it belongs to. Shared by a handler and every copy LangChain makes of it.
  */
 class RunTree {
-  private readonly open = new Map<string, { name?: string; parent?: string }>();
+  private readonly open = new Map<string, { name?: string; parent?: string; stiggContext?: StiggContext }>();
   private warnedFull = false;
   private readonly warned = new Set<string>();
 
@@ -99,8 +113,12 @@ class RunTree {
     private readonly warn: (message: string) => void,
   ) {}
 
-  start(runId: string, parent: string | undefined, name: string | undefined): void {
-    this.open.set(runId, { name: parent === undefined && this.rootAgent ? this.rootAgent : name, parent });
+  start(runId: string, parent: string | undefined, name: string | undefined, stiggContext?: StiggContext): void {
+    this.open.set(runId, {
+      name: parent === undefined && this.rootAgent ? this.rootAgent : name,
+      parent,
+      stiggContext,
+    });
     if (this.open.size <= OPEN_RUNS_LIMIT) return;
     // A forgotten run breaks the walk for the steps beneath it: they fall back to the shared
     // context - still checked and reported, but not as their agent - so that is said.
@@ -138,6 +156,23 @@ class RunTree {
 
   isAgent(name: string): boolean {
     return this.agents.has(name);
+  }
+
+  isOpen(runId: string): boolean {
+    return this.open.has(runId);
+  }
+
+  /**
+   * The `stiggContext`s stated from the top of the tree down to a run, outermost first. LangChain
+   * merges `metadata` one key deep, so a node that sets its own `stiggContext` replaces the run's
+   * rather than adding to it - walking the tree puts the run's back underneath. A context a run
+   * merely inherited is the same object as its parent's, and is applied once.
+   */
+  stiggContextsAt(runId: string | undefined): StiggContext[] {
+    const run = runId === undefined ? undefined : this.open.get(runId);
+    if (!run) return [];
+    const above = this.stiggContextsAt(run.parent);
+    return run.stiggContext && run.stiggContext !== above.at(-1) ? [...above, run.stiggContext] : above;
   }
 }
 
@@ -178,17 +213,17 @@ export class StiggLangChainCallbackHandler extends BaseCallbackHandler {
   // True of `@langchain/core` 1.2; the attribution tests run against the real manager, so a release
   // that changes either side fails them.
   override handleChainStart(...args: Parameters<NonNullable<BaseCallbackHandler['handleChainStart']>>): void {
-    const [, , runId, parentRunId, , , , runName] = args as unknown as [
+    const [, , runId, parentRunId, , metadata, , runName] = args as unknown as [
       unknown,
       unknown,
       string,
       string?,
       unknown?,
-      unknown?,
+      Record<string, unknown>?,
       unknown?,
       string?,
     ];
-    this.runs.start(runId, parentRunId, runName);
+    this.runs.start(runId, parentRunId, runName, this.stiggContextOf(metadata, parentRunId));
   }
 
   override handleChainEnd(_outputs: unknown, runId: string): void {
@@ -254,7 +289,7 @@ export class StiggLangChainCallbackHandler extends BaseCallbackHandler {
     const serialized = tool as { name?: string; id?: string[] } | undefined;
     const name = runName ?? serialized?.name;
     // A tool is a run too: a sub-agent it starts belongs below it in the tree.
-    this.runs.start(runId, parentRunId, name);
+    this.runs.start(runId, parentRunId, name, this.stiggContextOf(metadata, parentRunId));
     return this.middleware.startTool(
       runId,
       { name, callId: toolCallId, kind: serialized?.id?.at(-1), input: decoded(input) },
@@ -276,9 +311,10 @@ export class StiggLangChainCallbackHandler extends BaseCallbackHandler {
   }
 
   /**
-   * Who a step is for: the configured agent above it in the run tree, and the run's customer. With
-   * none above it, a name from metadata is passed on only as a label for the "not listed" warning -
-   * never a configured agent's name, which the tree alone can confer.
+   * Who a step is for: the configured agent above it in the run tree, and the `stiggContext`s the
+   * run stated on the way down. With no agent above it, a name from metadata is passed on only as a
+   * label for the "not listed" warning - never a configured agent's name, which the tree alone can
+   * confer.
    */
   private attributionOf(
     parentRunId: string | undefined,
@@ -286,7 +322,6 @@ export class StiggLangChainCallbackHandler extends BaseCallbackHandler {
   ): StepAttribution {
     const label = metadata?.[AGENT_METADATA_KEY] ?? metadata?.[NODE_METADATA_KEY];
     const unlisted = typeof label === 'string' && !this.runs.isAgent(label) ? label : undefined;
-    const customerId = metadata?.[CUSTOMER_METADATA_KEY];
     const agent = this.runs.agentAt(parentRunId);
     // Metadata naming a configured agent the tree does not find is a misconfiguration - a subgraph
     // node named apart from its agent, a top-level agent with no `rootAgent` - or a caller's attempt.
@@ -297,10 +332,60 @@ export class StiggLangChainCallbackHandler extends BaseCallbackHandler {
           'the top-level agent.',
       );
     }
+    const above = this.runs.stiggContextsAt(parentRunId);
+    const own = this.stiggContextOf(metadata, parentRunId);
+    // A step's own `stiggContext` replaced the run's in its metadata; only the tree puts the run's
+    // back. A parent this handler never saw start - the handler given to a model rather than to
+    // `invoke` - leaves the step with its own context alone, and the run's customer gone.
+    if (own && own.customerId === undefined && parentRunId !== undefined && !this.runs.isOpen(parentRunId)) {
+      this.runs.warnOnce(
+        "[stigg] a step's own stiggContext names no customer, and the run above it was never seen by this " +
+          "handler - so the run's stiggContext is lost. Pass the handler at `invoke` (`callbacks: [handler]`), " +
+          'not to a model or tool.',
+      );
+    }
     return {
       agent: agent ?? unlisted,
-      customerId: typeof customerId === 'string' && customerId ? customerId : undefined,
+      stiggContexts: own && own !== above.at(-1) ? [...above, own] : above,
     };
+  }
+
+  /**
+   * The `stiggContext` a run's metadata states, with the customer the deprecated key names. That key
+   * is what a server's auth handler was told to set, so it is the one trusted: a `stiggContext`
+   * naming another customer beside it is refused rather than charged to someone else. A run with no
+   * parent - `invoke`'s own metadata - states only `RUN_FIELDS`, with the deprecated key or without.
+   */
+  private stiggContextOf(
+    metadata: Record<string, unknown> | undefined,
+    parentRunId: string | undefined,
+  ): StiggContext | undefined {
+    const stated = metadata?.[CONTEXT_METADATA_KEY];
+    const customerId = metadata?.[CUSTOMER_METADATA_KEY];
+    if (stated !== undefined && (typeof stated !== 'object' || stated === null || Array.isArray(stated))) {
+      throw new Error(`metadata.${CONTEXT_METADATA_KEY} must be a \`stiggContext\` object, not ${String(stated)}.`);
+    }
+    const unlisted =
+      parentRunId === undefined && stated ? Object.keys(stated as object).filter((key) => !RUN_FIELDS.has(key)) : [];
+    if (unlisted.length) {
+      throw new Error(
+        `metadata.${CONTEXT_METADATA_KEY} on a run's \`invoke\` names only the customer and \`correlationId\`, not ` +
+          `${unlisted.join(', ')} - a client can write that metadata. Set the rest on the handler, under \`agents\`, ` +
+          "or in a node's own config.",
+      );
+    }
+    if (typeof customerId !== 'string' || !customerId) return stated as StiggContext | undefined;
+    this.runs.warnOnce(
+      `[stigg] metadata.${CUSTOMER_METADATA_KEY} is deprecated - pass \`metadata: { ${CONTEXT_METADATA_KEY}: { customerId } }\` instead.`,
+    );
+    const context = stated as StiggContext | undefined;
+    if (context?.customerId !== undefined && context.customerId !== customerId) {
+      throw new Error(
+        `metadata.${CONTEXT_METADATA_KEY}.customerId (${String(context.customerId)}) differs from metadata.${CUSTOMER_METADATA_KEY} ` +
+          `(${customerId}) - name the customer once, in metadata.${CONTEXT_METADATA_KEY}.`,
+      );
+    }
+    return { ...context, customerId };
   }
 }
 

@@ -22,6 +22,7 @@ import { createAgent, createMiddleware, tool, toolCallLimitMiddleware } from 'la
 import { z } from 'zod';
 import type { StiggAgentSDK } from '../../src';
 import {
+  HANDOFF_CAST,
   MAX_CALLS_PER_TOOL,
   PROMPTS,
   RECURSION_LIMIT,
@@ -132,7 +133,7 @@ type Subagent = {
   ): Promise<{ messages: BaseMessage[] }>;
 };
 
-startOrchestratorChat('LangChain', ({ stigg, model, search }) => {
+startOrchestratorChat('LangChain', HANDOFF_CAST, ({ stigg, model, search }) => {
   const researcher = createAgent({
     name: 'researcher',
     model,

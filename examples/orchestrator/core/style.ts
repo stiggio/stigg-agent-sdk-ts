@@ -19,6 +19,7 @@ export const AGENT_STYLES: Record<string, Extract<Style, string>> = {
   researcher: 'magenta',
   writer: 'yellow',
   generalist: 'green',
+  assistant: 'magenta',
 };
 
 export const tag = (agent: string | undefined): string =>

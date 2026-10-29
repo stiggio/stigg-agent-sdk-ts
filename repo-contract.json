@@ -118,7 +118,8 @@
         "example-gateway-litellm",
         "example-gateway-openrouter",
         "example-orchestrator-langchain",
-        "example-orchestrator-langgraph",
+        "example-orchestrator-langgraph-handoff",
+        "example-orchestrator-langgraph-model-fallback",
         "example-setup",
         "example-two-agents"
       ],

@@ -11,6 +11,7 @@ import { after, describe, it } from 'node:test';
 import { ChatAnthropic } from '@langchain/anthropic';
 import { BaseCallbackHandler } from '@langchain/core/callbacks/base';
 import { ToolMessage } from '@langchain/core/messages';
+import type { RunnableConfig } from '@langchain/core/runnables';
 import { createAgent, tool } from 'langchain';
 import { FakeListChatModel } from '@langchain/core/utils/testing';
 import { END, MessagesAnnotation, START, StateGraph } from '@langchain/langgraph';
@@ -98,7 +99,7 @@ async function governed(options: { agentBudget?: number; checkErrorAction?: 'all
   return { stigg, mock, handler, ingests, decisions, warnings };
 }
 
-const lead = { lc_agent_name: 'lead', stiggCustomerId: CUSTOMER };
+const lead = { lc_agent_name: 'lead', stiggContext: { customerId: CUSTOMER } };
 
 describe('StiggLangChainCallbackHandler', () => {
   it('is a real LangChain callback handler, and blocks by default', async () => {
@@ -200,7 +201,7 @@ describe('StiggLangChainCallbackHandler', () => {
     const { handler } = await governed();
     await assert.rejects(
       handler.handleChatModelStart(...modelStart('run-1', { lc_agent_name: 'lead' })),
-      /No customerId.*stiggCustomerId/,
+      /No customerId.*stiggContext: { customerId }/,
     );
   });
 
@@ -214,7 +215,7 @@ describe('StiggLangChainCallbackHandler', () => {
       hooks: { onIngest: (result) => ingests.push(result), onDecision: () => (checks += 1) },
     });
 
-    await handler.handleChatModelStart(...modelStart('run-1', { stiggCustomerId: CUSTOMER }));
+    await handler.handleChatModelStart(...modelStart('run-1', { stiggContext: { customerId: CUSTOMER } }));
     await handler.handleLLMEnd(llmResult('msg_1'), 'run-1');
     await stigg.flush();
 
@@ -349,6 +350,25 @@ describe('StiggLangChainCallbackHandler', () => {
     assert.deepEqual(seen, [{ name: 'web_search', input: { query: 'stigg' }, output: { results: [1, 2, 3] } }]);
   });
 
+  it("keeps a tool's own entitlement when the run's stiggContext names another", async () => {
+    const { handler, decisions } = await governed();
+    const run = { ...lead, stiggContext: { customerId: CUSTOMER, entitlement: { featureId: 'premium' } } };
+
+    await handler.handleToolStart({}, '{}', 't1', LEAD_RUN, [], run, 'web_search', 'call_t1');
+
+    assert.equal(decisions[0]?.context.tool, 'web_search');
+    assert.equal(decisions[0]?.context.entitlementId, 'credits', "the tool's price, not the run's");
+  });
+
+  it("warns when a step's own stiggContext names no customer and the run above it was never seen", async () => {
+    const { handler, warnings } = await governed();
+    const own = { stiggContext: { dimensions: { model: 'opus' } } };
+
+    await assert.rejects(handler.handleChatModelStart(...modelStart('run-1', own, 'unseen-run')), /customer/i);
+
+    assert.equal(warnings.filter((w) => w.includes('never seen by this handler')).length, 1);
+  });
+
   it("governs a packaged tool a node calls directly by its class, under '*'", async () => {
     const { stigg } = await newStigg({ agentBudget: 100 });
     const checked: (string | undefined)[] = [];
@@ -468,7 +488,7 @@ describe('what decides the agent, and what cannot', () => {
     const copy = handler.copy() as StiggLangChainCallbackHandler;
 
     // The agent's run started on the original; the model call inside it reaches the copy.
-    await copy.handleChatModelStart(...modelStart('run-1', { stiggCustomerId: CUSTOMER }));
+    await copy.handleChatModelStart(...modelStart('run-1', { stiggContext: { customerId: CUSTOMER } }));
 
     assert.equal(decisions[0]!.context.agent, 'lead');
   });
@@ -636,7 +656,7 @@ describe('a real createAgent, one handler for the graph', () => {
     const invoke = () =>
       leadAgent.invoke(
         { messages: [{ role: 'user', content: 'What is worth metering?' }] },
-        { callbacks: [handler], metadata: { stiggCustomerId: CUSTOMER } },
+        { callbacks: [handler], metadata: { stiggContext: { customerId: CUSTOMER } } },
       );
     return { stigg, checkedAs, billedAs, invoke };
   }
@@ -682,7 +702,8 @@ describe('a hand-built LangGraph StateGraph, the same handler', () => {
   /** The integration is the createAgent one, word for word: one handler, `agents` by name. */
   async function governed(agents: string[]) {
     vendor ??= await startMockServer();
-    const { stigg, mock } = await newStigg();
+    const warnings: string[] = [];
+    const { stigg, mock } = await newStigg({ logger: { ...noopLogger, warn: (m: string) => warnings.push(m) } });
     for (const agent of agents) {
       seedBudget(mock.state, CUSTOMER, {
         entityId: `agent-${agent}`,
@@ -692,6 +713,7 @@ describe('a hand-built LangGraph StateGraph, the same handler', () => {
       });
     }
     const checkedAs: string[] = [];
+    const contexts: { customerId: string; dimensions: Record<string, string> }[] = [];
     const handler = new StiggLangChainCallbackHandler({
       stigg,
       stiggContext: { attributionKey: 'agentId', entitlement: credits, ingestMode: 'sync' },
@@ -699,8 +721,10 @@ describe('a hand-built LangGraph StateGraph, the same handler', () => {
         agents.map((agent) => [agent, { stiggContext: { agentId: `agent-${agent}` }, tools: { web_search: credits } }]),
       ),
       hooks: {
-        onDecision: (_decision, context) =>
-          checkedAs.push(`${context.agent}${context.tool ? `/${context.tool}` : ''} as ${context.dimensions.agentId}`),
+        onDecision: (_decision, context) => {
+          checkedAs.push(`${context.agent}${context.tool ? `/${context.tool}` : ''} as ${context.dimensions.agentId}`);
+          contexts.push({ customerId: context.customerId, dimensions: context.dimensions });
+        },
       },
     });
     const model = new ChatAnthropic({
@@ -708,8 +732,8 @@ describe('a hand-built LangGraph StateGraph, the same handler', () => {
       apiKey: 'offline-mock',
       anthropicApiUrl: vendor.baseUrl,
     });
-    const config = { callbacks: [handler], metadata: { stiggCustomerId: CUSTOMER } };
-    return { model, config, checkedAs };
+    const config = { callbacks: [handler], metadata: { stiggContext: { customerId: CUSTOMER } } };
+    return { model, config, checkedAs, contexts, warnings };
   }
 
   it('governs each node as the agent of that name - a graph node is the agent', async () => {
@@ -750,5 +774,143 @@ describe('a hand-built LangGraph StateGraph, the same handler', () => {
       'researcher/web_search as agent-researcher',
       'researcher as agent-researcher',
     ]);
+  });
+
+  it("adds a node's own stiggContext to the run's - LangChain would replace it, the handler layers it", async () => {
+    const { model, config, contexts } = await governed(['assistant']);
+    const graph = new StateGraph(MessagesAnnotation)
+      .addNode('assistant', async ({ messages }, nodeConfig: RunnableConfig) => {
+        // The node's own call states a dimension; LangChain's metadata merge drops the run's
+        // `stiggContext` from this call, and the customer with it, unless the handler restores it.
+        const own = {
+          ...nodeConfig,
+          metadata: { ...nodeConfig.metadata, stiggContext: { dimensions: { model: 'opus' } } },
+        };
+        return { messages: [await model.invoke(messages, own)] };
+      })
+      .addEdge(START, 'assistant')
+      .addEdge('assistant', END)
+      .compile();
+
+    await graph.invoke({ messages: [{ role: 'user', content: 'hi' }] }, config);
+
+    assert.deepEqual(contexts, [{ customerId: CUSTOMER, dimensions: { agentId: 'agent-assistant', model: 'opus' } }]);
+  });
+
+  /** One node, `planner`, invoked with the run metadata given. */
+  const plannerGraph = (model: ChatAnthropic) =>
+    new StateGraph(MessagesAnnotation)
+      .addNode('planner', async ({ messages }) => ({ messages: [await model.invoke(messages)] }))
+      .addEdge(START, 'planner')
+      .addEdge('planner', END)
+      .compile();
+
+  it('still reads the customer from the deprecated stiggCustomerId, and says once that it is deprecated', async () => {
+    const { model, config, contexts, warnings } = await governed(['planner']);
+    const graph = plannerGraph(model);
+    const run = { callbacks: config.callbacks, metadata: { stiggCustomerId: CUSTOMER } };
+
+    await graph.invoke({ messages: [{ role: 'user', content: 'hi' }] }, run);
+    await graph.invoke({ messages: [{ role: 'user', content: 'again' }] }, run);
+
+    assert.deepEqual(
+      contexts.map((c) => c.customerId),
+      [CUSTOMER, CUSTOMER],
+    );
+    assert.equal(warnings.filter((w) => w.includes('stiggCustomerId is deprecated')).length, 1);
+  });
+
+  it("refuses a run's stiggContext that names another customer than the deprecated stiggCustomerId", async () => {
+    // The deprecated key is what a server's auth handler sets; a client's stiggContext beside it
+    // must not move the run onto someone else's budget.
+    const { model, config, contexts } = await governed(['planner']);
+    const metadata = { stiggCustomerId: CUSTOMER, stiggContext: { customerId: 'customer-other' } };
+
+    await assert.rejects(
+      plannerGraph(model).invoke(
+        { messages: [{ role: 'user', content: 'hi' }] },
+        { callbacks: config.callbacks, metadata },
+      ),
+      /differs from metadata\.stiggCustomerId/,
+    );
+    assert.deepEqual(contexts, []);
+  });
+
+  for (const malformed of ['customer-acme', null, [{ customerId: CUSTOMER }]]) {
+    it(`rejects the run when metadata.stiggContext is ${JSON.stringify(malformed)}, not an object`, async () => {
+      const { model, config, contexts } = await governed(['planner']);
+      const metadata = { stiggContext: malformed };
+
+      await assert.rejects(
+        plannerGraph(model).invoke(
+          { messages: [{ role: 'user', content: 'hi' }] },
+          { callbacks: config.callbacks, metadata },
+        ),
+        /metadata\.stiggContext must be a `stiggContext` object/,
+      );
+      assert.deepEqual(contexts, [], 'no step ran');
+    });
+  }
+
+  // `invoke`'s metadata is the request's on LangGraph Platform: it names who the run is for, and
+  // nothing that prices the run, keys it, or says which agent it is.
+  const notOnInvoke: Record<string, unknown>[] = [
+    { agentId: 'agent-other' },
+    { entitlement: { featureId: 'free' } },
+    { dimensions: { agentId: 'agent-other' } },
+    { defaultPlanId: 'plan-paid' },
+    { idempotencyKey: 'run-1' },
+  ];
+  for (const field of notOnInvoke) {
+    for (const deprecated of [false, true]) {
+      it(`refuses ${JSON.stringify(field)} in invoke's stiggContext${deprecated ? ', beside the deprecated stiggCustomerId' : ''}`, async () => {
+        const { model, config, contexts } = await governed(['planner']);
+        const metadata = deprecated
+          ? { stiggCustomerId: CUSTOMER, stiggContext: field }
+          : { stiggContext: { customerId: CUSTOMER, ...field } };
+
+        await assert.rejects(
+          plannerGraph(model).invoke(
+            { messages: [{ role: 'user', content: 'hi' }] },
+            { callbacks: config.callbacks, metadata },
+          ),
+          new RegExp(`names only the customer and \`correlationId\`, not ${Object.keys(field)[0]}`),
+        );
+        assert.deepEqual(contexts, [], 'no step ran');
+      });
+    }
+  }
+
+  it("refuses an idempotencyKey a node's own call states, under a run that set none", async () => {
+    const { model, config, contexts } = await governed(['planner']);
+    const graph = new StateGraph(MessagesAnnotation)
+      .addNode('planner', async ({ messages }, nodeConfig: RunnableConfig) => {
+        const own = { ...nodeConfig, metadata: { ...nodeConfig.metadata, stiggContext: { idempotencyKey: 'call-1' } } };
+        return { messages: [await model.invoke(messages, own)] };
+      })
+      .addEdge(START, 'planner')
+      .addEdge('planner', END)
+      .compile();
+
+    await assert.rejects(
+      graph.invoke({ messages: [{ role: 'user', content: 'hi' }] }, config),
+      /cannot set `idempotencyKey`/,
+    );
+    assert.deepEqual(contexts, []);
+  });
+
+  it('accepts both keys when they name the same customer', async () => {
+    const { model, config, contexts } = await governed(['planner']);
+    const metadata = {
+      stiggCustomerId: CUSTOMER,
+      stiggContext: { customerId: CUSTOMER, correlationId: 'req-1' },
+    };
+
+    await plannerGraph(model).invoke(
+      { messages: [{ role: 'user', content: 'hi' }] },
+      { callbacks: config.callbacks, metadata },
+    );
+
+    assert.deepEqual(contexts, [{ customerId: CUSTOMER, dimensions: { agentId: 'agent-planner' } }]);
   });
 });

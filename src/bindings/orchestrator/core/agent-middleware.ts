@@ -5,7 +5,7 @@
  * knows one vendor; here the middleware governs a graph's steps and a framework binding (the
  * LangChain callback handler, or a harness of your own) knows how its framework announces them.
  *
- * Every step is checked and billed as the agent that took it, so one agent running dry refuses
+ * Every step is checked and reported as the agent that took it, so one agent running dry refuses
  * that agent's steps and nothing else. A refusal is the SDK's own `AccessDeniedError`, thrown from
  * inside the step - the frameworks worth binding to offer hooks that observe a step, not ones that
  * replace its result - and what it means for the run is the graph's to decide. Nothing else throws
@@ -13,10 +13,16 @@
  * `checkErrorAction`.
  *
  * Steps are keyed by the run id the framework gives each one, because the end of a step usually
- * carries nothing else: what the start resolved is what the end bills.
+ * carries nothing else: what the start resolved is what the end reports.
  */
 import { AccessDeniedError } from '../../../errors';
-import { isEnforced, noCustomer, overrideContext, type ResolvedContext } from '../../../core/context';
+import {
+  isEnforced,
+  noCustomer,
+  overrideContext,
+  type ResolvedContext,
+  type StiggContext,
+} from '../../../core/context';
 import { safely } from '../../../core/hooks';
 import type { GovernanceSession } from '../../../core/session';
 import {
@@ -33,8 +39,12 @@ import {
 export type StepAttribution = {
   /** The agent that took the step, by the framework's own name for it. */
   agent?: string;
-  /** The customer the run is for, when the run named one. */
-  customerId?: string;
+  /**
+   * The `stiggContext`s the run stated on the way down to this step, outermost first - the run's,
+   * then any a node set for its own calls. Each is applied over the agent's context the way `wrap`
+   * applies a call's: the customer, dimensions, and anything else a call can override.
+   */
+  stiggContexts?: readonly StiggContext[];
 };
 
 /** A tool call the model issued in its reply: the id the tool step will refer back to, and what it named. */
@@ -62,14 +72,14 @@ export type AgentMiddleware = {
   /**
    * After a model call: its measurement is ingested, or the missing one reported. Never throws.
    * `issued` is the tool calls the reply asked for, so a tool step that arrives with only its call
-   * id is named, and billed to the agent that called it.
+   * id is named, and reported for the agent that called it.
    */
   endModel(runId: string, measurement: Measurement | undefined, issued?: readonly IssuedToolCall[]): Promise<void>;
   /** Before a tool runs: checked when the tool is a paid one, raising when refused. */
   startTool(runId: string, tool: ToolStep, attribution: StepAttribution): Promise<void>;
   /** After a tool succeeded: what its `usage` makes of the call, or one unit. Never throws. */
   endTool(runId: string, output?: unknown, name?: string): Promise<void>;
-  /** A step that failed: forgotten, and billed nothing - it did not deliver what it charges for. */
+  /** A step that failed: forgotten, and reports nothing - it did not deliver what it charges for. */
   abandon(runId: string): void;
 };
 
@@ -138,7 +148,7 @@ export function resolveAgents(
     if (agent.stiggContext?.idempotencyKey !== undefined) {
       throw new Error(
         `stigg.middleware's agents.${name}.stiggContext cannot set \`idempotencyKey\` - one key shared ` +
-          'by every step that agent takes would bill the first and discard the rest. Each step is keyed by its own id.',
+          'by every step that agent takes would report the first and discard the rest. Each step is keyed by its own id.',
       );
     }
     resolved.set(name, {
@@ -178,7 +188,7 @@ export type AgentMiddlewareConfig = {
   missingCustomer: string;
 };
 
-/** A step in flight: what its start resolved, kept until its end bills it. */
+/** A step in flight: what its start resolved, kept until its end reports it. */
 type Step = {
   context: ResolvedContext;
   idempotencyKey?: string;
@@ -233,7 +243,7 @@ export function createAgentMiddleware(session: GovernanceSession, config: AgentM
 
   /**
    * The agent a step belongs to. One the configuration does not list - or a step attributed to no
-   * agent - resolves to the shared context, so nothing runs unbilled for having been left out.
+   * agent - resolves to the shared context, so nothing runs unmetered for having been left out.
    */
   const agentFor = (agent: string | undefined): ResolvedAgent => {
     const own = agent === undefined ? undefined : config.agents.get(agent);
@@ -251,9 +261,25 @@ export function createAgentMiddleware(session: GovernanceSession, config: AgentM
     return own ?? config.shared;
   };
 
-  /** The context for one step. The customer is required: an empty one would be billed to nobody. */
-  const contextFor = (base: ResolvedContext, { agent, customerId }: StepAttribution): ResolvedContext => {
-    const context = customerId ? overrideContext(base, { customerId }) : base;
+  /** The context for one step. The customer is required: an empty one would report usage for nobody. */
+  const contextFor = (base: ResolvedContext, attribution: StepAttribution): ResolvedContext => {
+    const { agent, stiggContexts = [] } = attribution;
+    // A harness from 0.5 still naming the customer here would otherwise be told it named none.
+    if ('customerId' in attribution) {
+      throw new Error(
+        'A step names its customer in `stiggContexts: [{ customerId }]` - `StepAttribution.customerId` was ' +
+          'removed in 0.6.',
+      );
+    }
+    // A run spans many steps, so a key of its own would dedupe them all into the first - refused
+    // as the shared and the agents' contexts refuse it. Each step is keyed by its own id.
+    if (stiggContexts.some((layer) => layer?.idempotencyKey !== undefined)) {
+      throw new Error(
+        "A run's stiggContext cannot set `idempotencyKey` - one key shared by every step beneath it would " +
+          'report the first and discard the rest. Each step is keyed by its own id.',
+      );
+    }
+    const context = stiggContexts.reduce((resolved, override) => overrideContext(resolved, override), base);
     if (!context.customerId) throw noCustomer(config.missingCustomer);
     return agent === undefined ? context : { ...context, agent };
   };
@@ -265,7 +291,7 @@ export function createAgentMiddleware(session: GovernanceSession, config: AgentM
     if (!decision.hasAccess) throw new AccessDeniedError(decision);
   };
 
-  /** A step in flight. One dropped to make room is never billed, so that is said, not silent. */
+  /** A step in flight. One dropped to make room is never reported, so that is said, not silent. */
   const rememberStep = (runId: string, step: Step): void => {
     const dropped = remember(steps, runId, step, STEPS_LIMIT);
     if (dropped) reportDropped(dropped.context, 'a step');
@@ -291,14 +317,19 @@ export function createAgentMiddleware(session: GovernanceSession, config: AgentM
     for (const call of issued) remember(issuedCalls, call.id, { name: call.name, agent }, ISSUED_CALLS_LIMIT);
   };
 
-  /** A tool step's context: priced by the tool's own entitlement, when it has one, and labelled with the tool. */
+  /**
+   * A tool step's context: priced by the tool's own entitlement, when it has one, and labelled with
+   * the tool. The tool goes last - a run's `stiggContext` naming another entitlement re-prices its
+   * model calls, not the tools it set a price on.
+   */
   const toolContext = (agent: ResolvedAgent, tool: ResolvedTool, name: string, attribution: StepAttribution) => {
     const eventName = { name: `tool.${name}` };
+    const step = contextFor(agent.context, attribution);
     const priced = overrideContext(
-      agent.context,
+      step,
       tool.entitlement ? { entitlement: tool.entitlement, eventName } : { eventName },
     );
-    return { ...contextFor(priced, attribution), tool: name };
+    return { ...priced, agent: step.agent, tool: name };
   };
 
   /** Reports what a tool step that ended used: its `usage`, or one unit. A bad `usage` is a metering failure. */
@@ -376,7 +407,7 @@ export function createAgentMiddleware(session: GovernanceSession, config: AgentM
 
     async startTool(runId, { name, callId, kind, input }, attribution) {
       // Never taken, only looked up - the cap drops old ones: a tools node that runs again, before
-      // or after the call succeeded, is the same call, owned by the same agent, billed under one key.
+      // or after the call succeeded, is the same call, owned by the same agent, reported under one key.
       const issued = callId === undefined ? undefined : issuedCalls.get(callId);
       const named = name ?? issued?.name;
       const toolName = named ?? kind;

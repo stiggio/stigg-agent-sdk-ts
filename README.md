@@ -73,6 +73,54 @@ try {
 the shortest path from nothing to working metering is a currency and a `customerId` — no catalog
 modelling first.
 
+## 🕸️ Governing an agent graph
+
+A wrapper governs one client. A LangChain or LangGraph graph runs many agents and tools, so it
+gets one handler instead, passed on `invoke` — LangChain hands it to every model and tool call
+beneath, sub-agents included. Each agent is checked and reports its usage as itself. It imports
+`@langchain/core`, an optional peer, so it uses the copy your application already has.
+
+```ts
+import { StiggAgentSDK } from '@stigg/agent-sdk-js';
+import { StiggLangChainCallbackHandler } from '@stigg/agent-sdk-js/langchain';
+
+const stigg = new StiggAgentSDK();
+const credits = { currencyId: 'credits' };
+
+// Once per customer: each agent an entity with its own budget - what `agentId` below names.
+for (const agentId of ['agent-researcher', 'agent-writer']) {
+  await stigg.register({ customerId: 'customer-acme', agentId, entityTypeId: 'agent', budget: { entitlement: credits, limit: 100 } });
+}
+
+const stiggHandler = new StiggLangChainCallbackHandler({
+  stigg,
+  stiggContext: { attributionKey: 'agentId', entitlement: credits }, // the whole graph
+  agents: {
+    // by the name LangChain knows the agent or node by
+    researcher: { stiggContext: { agentId: 'agent-researcher' }, tools: { web_search: credits } },
+    writer: { stiggContext: { agentId: 'agent-writer' } },
+  },
+});
+
+await graph.invoke(input, {
+  callbacks: [stiggHandler],
+  metadata: { stiggContext: { customerId: 'customer-acme' } }, // per run
+});
+```
+
+Both take the same `stiggContext`, merged the same way — only where it attaches differs:
+
+| | Wrapper | Agent graph |
+| --- | --- | --- |
+| Attaches to | one vendor client | the graph's `invoke` |
+| The whole thing | `wrap(client, { stiggContext })` | `new StiggLangChainCallbackHandler({ stiggContext })` |
+| Per agent | a wrapped client per agent | `agents[name].stiggContext` |
+| Per request | `create({ ..., stiggContext })` | `invoke(input, { metadata: { stiggContext } })` |
+| Tools | not seen | `tools`, checked and metered per call |
+| A refusal | the call throws | the step throws, and the graph decides — a refused sub-agent reads to its lead as a failed tool call |
+
+The [LangChain and LangGraph guide](docs/langchain.md) has every configuration.
+
 ## 🧭 How it works
 
 Three things happen around a call you already make:

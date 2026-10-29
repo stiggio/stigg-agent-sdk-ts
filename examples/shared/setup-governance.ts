@@ -1,22 +1,44 @@
 /**
- * Seeds whatever the examples need, in whichever environment is selected, idempotently.
+ * Makes sure the Stigg objects the examples need exist, in whichever environment is selected -
+ * read first, created only when missing, so it runs at the start of every example, live and offline.
  *
- * Governance is optional: steps 1-2 (a customer, a funded credit pool) are what every account
- * needs, and steps 3-4 (entity types, entities, per-entity budgets) only run when the account
- * actually has governance. An account without it still gets a working demo - it just enforces at
- * the customer level, with no per-agent chain.
+ * Two halves, because they hang off different things:
+ *
+ *   1. The environment - the credit currency or feature the demo gates on, the entity types, and
+ *      a free demo plan carrying the demo's monthly credits (or its feature), under a product of its
+ *      own and published. Written through the API, before the SDK starts.
+ *   2. The customer's tree - the team and the agents, with their budgets. Written through the SDK's
+ *      own `register`, with the demo plan as `defaultPlanId`: the customer is provisioned onto it the
+ *      first time, by the SDK, which is how a new customer arrives funded.
+ *
+ * Nothing creates the customer directly and nothing grants credits: the plan does both. Governance
+ * is optional - an account without it skips the entity types and the tree, and enforces at the
+ * customer level instead.
  *
  * Run:  yarn example-setup [--agent-limit 3] [--no-governance]
  */
 import './load-env';
 import Stigg from '@stigg/typescript';
+import { StiggAgentSDK } from '../../src';
 import { looksLikeGovernanceNotEnabled } from '../../src/errors';
-import { entitlementId, entitlementKind, entitlementRef } from '../../src/types';
+import { entitlementId, entitlementKind } from '../../src/types';
 import { CLIENT_AGENT_SUFFIXES, agentIdFor, describeSetup, resolveDemoEnv, type DemoEnv } from './demo-env';
-import { requireKey, resolveStiggEnv } from './stigg-env';
+import { requireKey, resolveStiggEnv, type StiggEnv } from './stigg-env';
 import { seedCreditRate, seedEventMeter, type MockState } from '../../testing/mock-stigg-server';
 import { DEFAULT_RECIPES, eventNameFor } from '../../src/internal';
-import { maybeStartMockStiggServer } from './mock-stigg-server';
+import { maybeStartMockStiggServer, type MockStiggServer } from './mock-stigg-server';
+
+/** The entity type the agents' parent is. */
+const TEAM_ENTITY_TYPE = 'team';
+
+/** The dimensional entity type a per-model budget is scoped by, and the dimension it is matched on. */
+export const MODEL_ENTITY_TYPE = 'model';
+export const MODEL_DIMENSION = 'model';
+
+/** The product the demo plan sits under, and what the plan grants each month. */
+const DEMO_PRODUCT_ID = 'product-agent-sdk-demo';
+const DEMO_PLAN_CREDITS = 10_000;
+const DEMO_PLAN_FEATURE_LIMIT = 10_000;
 
 export type SetupOptions = {
   /**
@@ -27,7 +49,6 @@ export type SetupOptions = {
   agentLimit?: number | null;
   teamLimit?: number | null;
   cadence?: string;
-  poolMin?: number;
   governance?: boolean;
   archive?: boolean;
   log?: (line: string) => void;
@@ -35,7 +56,6 @@ export type SetupOptions = {
 
 export type SetupResult = {
   governanceEnabled: boolean;
-  poolLimit: number;
   entities: string[];
 };
 
@@ -56,160 +76,338 @@ function numberFlag(argv: string[], name: string, fallback: number): number {
   return value;
 }
 
+const isNotFound = (err: unknown) => (err as { status?: number }).status === 404;
+
 /**
- * Idempotent throughout: entity types, entities and assignments are upserts, and the credit
- * grant is guarded by a balance read (grants themselves are not idempotent - a blind re-run
- * would keep topping the wallet up).
+ * The environment's half: everything that is not a customer's. Idempotent throughout - each object
+ * is read first and created only when it is missing, and every creation is said.
  */
-export async function setupGovernance(
+export async function ensureEnvironment(
   client: Stigg,
   demoEnv: DemoEnv,
-  options: SetupOptions = {},
-): Promise<SetupResult> {
+  options: Pick<SetupOptions, 'governance' | 'log'> = {},
+): Promise<{ governanceEnabled: boolean }> {
   const log = options.log ?? console.log;
-  const cadence = options.cadence ?? 'P1M';
-  const poolMin = options.poolMin ?? 500;
-  // Optional throughout: an entitlement is what a budget is written over, so without one there is
-  // a tree to build but nothing to fund and nothing to assign. Steps 1 and 3-4's entities still run.
   const entitlement = demoEnv.entitlement;
-  const capabilityId = entitlement && entitlementId(entitlement);
-  // The SDK has no default for either half, so what the examples configure is what this seeds -
-  // and an agent attributed under a key its type does not declare resolves nothing at all.
-  const { entityTypeId, attributionKey } = demoEnv.agentType ?? { entityTypeId: 'agent', attributionKey: 'agentId' };
 
-  // 1. The customer. Everything else hangs off it, governance or not.
-  try {
-    await client.v1.customers.retrieve(demoEnv.customerId);
-  } catch (err) {
-    if ((err as { status?: number }).status !== 404) throw err;
-    await client.v1.customers.provision({ id: demoEnv.customerId, name: demoEnv.customerId });
-    log(`  created customer ${demoEnv.customerId}`);
-  }
-
-  // 2. A funded pool, for a credit entitlement. The pool must dwarf the per-agent budget, or the demo
-  //    denial would come from an empty wallet rather than from the agent's own cap.
-  let poolLimit = 0;
-  if (entitlement && capabilityId && entitlementKind(entitlement) === 'credit') {
-    const checked = await client.v1.customers.checkEntitlement(demoEnv.customerId, { currencyId: capabilityId });
-    const data = checked.data as { usageLimit?: number; currentUsage?: number };
-    poolLimit = data.usageLimit ?? 0;
-    const remaining = poolLimit - (data.currentUsage ?? 0);
-    if (remaining < poolMin) {
-      await client.v1.credits.grants.create({
-        customerId: demoEnv.customerId,
-        currencyId: capabilityId,
-        amount: poolMin * 2,
-        displayName: 'agent-sdk example grant',
-        grantType: 'PROMOTIONAL',
-      });
-      poolLimit += poolMin * 2;
-      log(`  granted ${poolMin * 2} ${capabilityId} (balance was ${remaining})`);
-    } else {
-      log(`  pool already funded: ${remaining} ${capabilityId} remaining`);
+  // 1. What the demo gates on. A currency is spent from the customer's credits; a feature needs
+  //    a meter of its own.
+  if (entitlement?.currencyId) {
+    const { currencyId } = entitlement;
+    if (!(await currencyExists(client, currencyId))) {
+      const created = await unlessRaced(
+        () => client.v1.credits.customCurrencies.create({ id: currencyId, displayName: currencyId }),
+        () => currencyExists(client, currencyId),
+      );
+      if (created) log(`  created credit currency ${currencyId}`);
+    }
+  } else if (entitlement?.featureId) {
+    const { featureId } = entitlement;
+    if (!(await featureExists(client, featureId))) {
+      const created = await unlessRaced(
+        () =>
+          client.v1.features.createFeature({
+            id: featureId,
+            displayName: featureId,
+            featureType: 'NUMBER',
+            meterType: 'INCREMENTAL',
+          }),
+        () => featureExists(client, featureId),
+      );
+      if (created) log(`  created metered feature ${featureId}`);
     }
   }
 
-  // 3. Is governance available at all? A 403 here is an account state, not a failure.
+  // 2. The demo plan a new customer is provisioned onto - which is what funds them.
+  if (demoEnv.planId) await ensureDemoPlan(client, demoEnv.planId, entitlement, log);
+
+  // 3. The entity types, when the account has governance. A 403 here is an account state.
   if (options.governance === false) {
-    log('  --no-governance: entity and budget steps skipped (customer-level enforcement only)');
-    return { governanceEnabled: false, poolLimit, entities: [] };
+    log('  --no-governance: entity types and budgets skipped (customer-level enforcement only)');
+    return { governanceEnabled: false };
   }
+  const existing = new Map<string, string[]>();
   try {
-    await client.v1Beta.entityTypes.list({ limit: 1 });
+    for await (const type of client.v1Beta.entityTypes.list({})) existing.set(type.id, type.attributionKeys);
   } catch (err) {
     if (!looksLikeGovernanceNotEnabled(err)) throw err;
-    log('  governance is not enabled for this account - entity and budget steps skipped.');
+    log('  governance is not enabled for this account - entity types and budgets skipped.');
     log('  The examples still run: enforcement happens at the customer level instead.');
-    return { governanceEnabled: false, poolLimit, entities: [] };
+    return { governanceEnabled: false };
+  }
+  // The SDK has no default for either half, so what the examples configure is what this seeds -
+  // and an agent attributed under a key its type does not declare resolves nothing at all.
+  const { entityTypeId, attributionKey } = demoEnv.agentType ?? { entityTypeId: 'agent', attributionKey: 'agentId' };
+  // One upsert declares both, and the later of two types with one id would replace the other.
+  if (entityTypeId === MODEL_ENTITY_TYPE || entityTypeId === TEAM_ENTITY_TYPE) {
+    throw new Error(
+      `AGENT_SDK_DEMO_ENTITY_TYPE_ID cannot be "${entityTypeId}" - the seed declares that type itself, ` +
+        `for the ${entityTypeId === TEAM_ENTITY_TYPE ? "agents' parent" : 'model dimension'}. Pick another.`,
+    );
+  }
+  const wanted = [
+    { id: TEAM_ENTITY_TYPE, attributionKeys: ['teamId'], displayName: 'Team' },
+    {
+      // Declared from the environment, and with it the key a run attributes by - the entity, the
+      // type and the dimension have to agree or governance resolves nothing and charges the
+      // customer instead, which looks exactly like a run that was never governed.
+      id: entityTypeId,
+      attributionKeys: [attributionKey],
+      displayName: 'Agent',
+      description: 'A durable agent; budgets attach here.',
+    },
+    {
+      // A dimensional type beside the tree, so an agent can hold a budget per model.
+      id: MODEL_ENTITY_TYPE,
+      attributionKeys: [MODEL_DIMENSION],
+      displayName: 'Model',
+      description: 'An LLM model; a budget scoped to one applies to its calls alone.',
+    },
+  ];
+  // A type the account already has is the account's: never rewritten, only checked against what
+  // the demo attributes by.
+  for (const type of wanted) {
+    const keys = existing.get(type.id);
+    if (keys && !type.attributionKeys.every((key) => keys.includes(key))) {
+      log(
+        `  entity type ${type.id} exists, attributed by [${keys.join(', ')}] rather than ` +
+          `${type.attributionKeys.join(', ')} - left as it is, so the demo's ${type.id}s resolve nothing.`,
+      );
+    }
+  }
+  const missing = wanted.filter((type) => !existing.has(type.id));
+  if (missing.length) {
+    await client.v1Beta.entityTypes.upsert({ types: missing });
+    log(`  created entity types ${missing.map((type) => type.id).join(', ')}`);
+  }
+  return { governanceEnabled: true };
+}
+
+/** What the seed writes on a plan it creates - the only plans it will ever finish or publish. */
+const SEEDED_BY = { createdBy: 'stigg-agent-sdk-examples' };
+
+async function retrievePlan(client: Stigg, planId: string) {
+  try {
+    return (await client.v1.plans.retrieve(planId)).data;
+  } catch (err) {
+    if (isNotFound(err)) return undefined;
+    throw err;
+  }
+}
+
+/** Every page, not the first: an account with many currencies has this one past it. */
+async function currencyExists(client: Stigg, currencyId: string): Promise<boolean> {
+  for await (const currency of client.v1.credits.customCurrencies.list({})) {
+    if (currency.id === currencyId) return true;
+  }
+  return false;
+}
+
+async function featureExists(client: Stigg, featureId: string): Promise<boolean> {
+  try {
+    await client.v1.features.retrieveFeature(featureId);
+    return true;
+  } catch (err) {
+    if (isNotFound(err)) return false;
+    throw err;
+  }
+}
+
+/** Every page, not the first: an account with many products has this one past it. */
+async function productExists(client: Stigg): Promise<boolean> {
+  for await (const product of client.v1.products.listProducts({})) {
+    if (product.id === DEMO_PRODUCT_ID) return true;
+  }
+  return false;
+}
+
+/**
+ * A write that may lose a race to another example starting at the same moment: when it fails,
+ * the object is read back, and one that exists now counts. Answers whether this call did the work.
+ */
+async function unlessRaced(write: () => Promise<unknown>, done: () => Promise<boolean>): Promise<boolean> {
+  try {
+    await write();
+    return true;
+  } catch (err) {
+    if (await done()) return false;
+    throw err;
+  }
+}
+
+/**
+ * A free plan under the demo product, granting the demo's credits each month - or its feature, up
+ * to a limit - published. Only a plan this seed created is ever finished or published: one that
+ * already existed - a draft included - may be somebody's, so what it lacks is said, never written.
+ */
+async function ensureDemoPlan(
+  client: Stigg,
+  planId: string,
+  entitlement: DemoEnv['entitlement'],
+  log: (line: string) => void,
+): Promise<void> {
+  let plan = await retrievePlan(client, planId);
+
+  if (!plan) {
+    if (!(await productExists(client))) {
+      const created = await unlessRaced(
+        () => client.v1.products.createProduct({ id: DEMO_PRODUCT_ID, displayName: 'Agent SDK demo' }),
+        () => productExists(client),
+      );
+      if (created) log(`  created product ${DEMO_PRODUCT_ID}`);
+    }
+    const created = await unlessRaced(
+      () =>
+        client.v1.plans.create({
+          id: planId,
+          displayName: 'Agent SDK demo (free)',
+          productId: DEMO_PRODUCT_ID,
+          pricingType: 'FREE',
+          metadata: SEEDED_BY,
+        }),
+      async () => (await retrievePlan(client, planId)) !== undefined,
+    );
+    if (created) log(`  created free plan ${planId}`);
+    plan = await retrievePlan(client, planId);
+    if (!plan) throw new Error(`plan ${planId} was created but cannot be read back`);
   }
 
-  // 4. The tree. Two levels, so a denial can demonstrate the ancestor rule.
-  await client.v1Beta.entityTypes.upsert({
-    types: [
-      { id: 'team', attributionKeys: ['teamId'], displayName: 'Team' },
-      {
-        // Declared from the environment, and with it the key a run attributes by - the entity, the
-        // type and the dimension have to agree or governance resolves nothing and bills the
-        // customer instead, which looks exactly like a run that was never governed.
-        id: entityTypeId,
-        attributionKeys: [attributionKey],
-        displayName: 'Agent',
-        description: 'A durable agent; budgets attach here.',
-      },
-    ],
-  });
+  const id = entitlement && entitlementId(entitlement);
+  const type = entitlement && (entitlementKind(entitlement) === 'credit' ? 'CREDIT' : 'FEATURE');
+  // A credit and a feature may share an id; only the kind the demo meters counts as granted.
+  const grants = () => !id || plan!.entitlements.some((granted) => granted.id === id && granted.type === type);
 
+  if (plan.metadata?.createdBy !== SEEDED_BY.createdBy) {
+    // Somebody's plan: never rewritten. Say what keeps it from serving the demo.
+    if (!grants()) {
+      log(`  plan ${planId} does not grant ${id} - new customers on it arrive unfunded.`);
+      log('  Add it to the plan, or point AGENT_SDK_DEMO_PLAN_ID at a plan that grants it.');
+    }
+    if (plan.status === 'DRAFT') {
+      log(`  plan ${planId} is a draft - customers cannot be provisioned onto it until it is published.`);
+    }
+    return;
+  }
+
+  // The seed's own plan: finish what an earlier start - or one racing this one - may have left.
+  if (entitlement && id && !grants()) {
+    if (plan.status !== 'DRAFT') {
+      log(`  plan ${planId} is published without ${id} - new customers on it arrive unfunded.`);
+    } else {
+      const added = await unlessRaced(
+        () =>
+          client.v1.plans.entitlements.create(planId, {
+            entitlements: [
+              entitlementKind(entitlement) === 'credit'
+                ? { type: 'CREDIT', id, amount: DEMO_PLAN_CREDITS, cadence: 'MONTH' }
+                : { type: 'FEATURE', id, usageLimit: DEMO_PLAN_FEATURE_LIMIT, resetPeriod: 'MONTH' },
+            ],
+          }),
+        async () => ((plan = await retrievePlan(client, planId)), grants()),
+      );
+      if (added) log(`  plan ${planId} now grants ${id} each month`);
+    }
+  }
+
+  if (plan.status === 'DRAFT') {
+    const published = await unlessRaced(
+      () => client.v1.plans.publish(planId, { migrationType: 'NEW_CUSTOMERS' }),
+      async () => (await retrievePlan(client, planId))?.status === 'PUBLISHED',
+    );
+    if (published) log(`  published plan ${planId}`);
+  }
+}
+
+/**
+ * The customer's half: the team and the agents, with their budgets, through the SDK's own
+ * `register`. Given the demo plan, the first register provisions the customer onto it - so this is
+ * also where a new customer is created, by the SDK, funded by the plan.
+ */
+export async function seedCustomer(
+  stigg: StiggAgentSDK,
+  demoEnv: DemoEnv,
+  options: SetupOptions = {},
+): Promise<string[]> {
+  const log = options.log ?? console.log;
+  const cadence = options.cadence ?? 'P1M';
+  const { entitlement, customerId, planId: defaultPlanId } = demoEnv;
+  const { entityTypeId } = demoEnv.agentType ?? { entityTypeId: 'agent' };
   // An explicit [] means the caller provisions its own agents; omitted means the configured one -
   // of which there may be none, when the examples are running against the customer's own pool.
   const agents = options.agents ?? (demoEnv.agentId ? [demoEnv.agentId] : []);
   // Likewise optional: with no team the agents are roots, and the ancestor rule has no second
   // level to demonstrate. The examples that need one say so themselves.
   const team = demoEnv.teamId;
-
-  await client.v1Beta.customers.entities.upsert(demoEnv.customerId, {
-    entities: [
-      ...(team ? [{ id: team, entityTypeId: 'team', displayName: team }] : []),
-      ...agents.map((id) => ({ id, entityTypeId, displayName: id })),
-    ],
-  });
-
-  // An assignment is written over (entity x entitlement). With no entitlement named there is
-  // nowhere for a budget to land, so the tree above stands and the budgets are simply skipped.
-  if (!entitlement || !capabilityId) {
-    log('  no entitlement configured - the entities exist, but no assignment was written and no');
-    log('  budget was set, because an assignment is written over (entity x entitlement) and there');
-    log('  is no entitlement to write it against. The runs themselves gate nothing. Set');
-    log('  AGENT_SDK_DEMO_CURRENCY_ID or AGENT_SDK_DEMO_FEATURE_ID to enforce.');
-    // The budgets are what this branch skips, not the entities - which were written above and
-    // would otherwise outlive the `--archive` that was asked for.
-    if (options.archive) await archiveEntities(client, demoEnv.customerId, team, agents, log);
-    return { governanceEnabled: true, poolLimit, entities: [...(team ? [team] : []), ...agents] };
-  }
-
-  const capability = entitlementRef(entitlement);
   const agentLimit = options.agentLimit === undefined ? 3 : options.agentLimit;
   // Room for every agent to spend its own budget without the team becoming the binding
   // constraint - the ancestor rule is worth demonstrating deliberately, not by accident.
   const teamLimit =
     options.teamLimit !== undefined ? options.teamLimit : agentLimit === null ? null : agentLimit * (agents.length + 1);
+  // An assignment is written over (entity x entitlement): with none named there is nowhere for a
+  // budget to land, so the entities stand and the budgets are skipped.
+  const budget = (limit: number | null, parentId: string | null) =>
+    entitlement ? { budget: { entitlement, limit, cadence, parentId } } : {};
 
-  await client.v1Beta.customers.assignments.upsert(demoEnv.customerId, {
-    assignments: [
-      ...(team ? [{ entityId: team, ...capability, usageLimit: teamLimit, cadence, parentId: null }] : []),
-      // parentId rides the assignment: the entity upsert rejects it outright. `null` rather than
-      // undefined with no team - these agents are roots, not agents whose parent is left alone.
-      ...agents.map((id) => ({ entityId: id, ...capability, usageLimit: agentLimit, cadence, parentId: team ?? null })),
-    ],
-  });
-  log(
-    `  budgets: ${team ? `${team}=${teamLimit ?? 'unlimited'}` : '(no team)'}` +
-      `${agents.length ? ` -> ${agents.join(', ')} = ${agentLimit ?? 'unlimited'} each` : ', and no agents'}` +
-      `, per ${cadence}`,
-  );
+  if (team) {
+    await stigg.register({
+      customerId,
+      defaultPlanId,
+      agentId: team,
+      entityTypeId: TEAM_ENTITY_TYPE,
+      ...budget(teamLimit, null),
+    });
+  }
+  for (const agentId of agents) {
+    await stigg.register({ customerId, defaultPlanId, agentId, entityTypeId, ...budget(agentLimit, team ?? null) });
+  }
+  if (entitlement && (team || agents.length)) {
+    log(
+      `  budgets: ${team ? `${team}=${teamLimit ?? 'unlimited'}` : '(no team)'}` +
+        `${agents.length ? ` -> ${agents.join(', ')} = ${agentLimit ?? 'unlimited'} each` : ', and no agents'}` +
+        `, per ${cadence}`,
+    );
+  }
 
-  if (options.archive) await archiveEntities(client, demoEnv.customerId, team, agents, log);
-
-  return { governanceEnabled: true, poolLimit, entities: [...(team ? [team] : []), ...agents] };
+  if (options.archive) {
+    for (const agentId of agents) await stigg.deregister({ customerId, agentId });
+    if (team) await stigg.deregister({ customerId, agentId: team });
+    log('  archived the agents, then the team');
+  }
+  return [...(team ? [team] : []), ...agents];
 }
 
 /**
- * Seeds the in-process mock so an example runs end-to-end with no account at all. The real
- * environments are seeded by running this file as a script instead.
+ * What every example runs first: the environment, then - with governance - the customer's tree.
+ * Against the mock it also seeds what an account configures out of band and the API cannot set:
+ * the credit rates a plan's consumption mapping would carry, and the raw-events meters.
  */
-export async function seedMock(
+export async function prepareDemo(
+  env: StiggEnv,
   demoEnv: DemoEnv,
-  mock: { baseUrl: string; state?: MockState },
+  stigg: StiggAgentSDK,
+  mock: MockStiggServer | undefined,
   options: SetupOptions = {},
 ): Promise<SetupResult> {
-  // What a unit of each metric costs in credits - the mock's stand-in for the consumption mapping
-  // a real plan carries. Without it the examples would report tokens against features nothing
-  // converts, the wallet would never move, and the SDK would (correctly) say so every run.
-  if (mock.state) {
-    for (const [featureId, rate] of Object.entries(DEMO_CREDIT_RATES)) seedCreditRate(mock.state, featureId, rate);
-    seedDemoEventMeters(mock.state, demoEnv);
-  }
-  const client = new Stigg({ apiKey: 'offline-mock', baseURL: mock.baseUrl });
-  return setupGovernance(client, demoEnv, { poolMin: 500, ...options });
+  if (mock) seedOfflineAccount(mock.state, demoEnv);
+  const client = new Stigg(
+    mock ? { apiKey: 'offline-mock', baseURL: mock.baseUrl } : { apiKey: requireKey(env), baseURL: env.baseUrl },
+  );
+  const { governanceEnabled } = await ensureEnvironment(client, demoEnv, options);
+  // With no agent type a run is customer-level: nothing is attributed to an entity, so there is no
+  // tree to seed - and the customer is provisioned by the run's first call instead.
+  const entities = governanceEnabled && demoEnv.agentType ? await seedCustomer(stigg, demoEnv, options) : [];
+  return { governanceEnabled, entities };
+}
+
+/**
+ * What an account configures out of band and the API cannot set, seeded into the mock: the credit
+ * rates a plan's consumption mapping carries, and the raw-events meters. Without the rates the
+ * examples would report tokens against features nothing converts, the wallet would never move,
+ * and the SDK would (correctly) say so every run.
+ */
+export function seedOfflineAccount(state: MockState, demoEnv: DemoEnv): void {
+  for (const [featureId, rate] of Object.entries(DEMO_CREDIT_RATES)) seedCreditRate(state, featureId, rate);
+  seedDemoEventMeters(state, demoEnv);
 }
 
 /**
@@ -284,7 +482,7 @@ export const DEMO_CREDIT_RATES: Record<string, number> = {
   completion_tokens: 0.02,
   cached_tokens: 0.0002,
   // Gemini's own names, on the same scale: its two input-side counters priced like an input
-  // token, and both output-side ones - thinking tokens are billed as output - like an output
+  // token, and both output-side ones - thinking tokens are priced as output - like an output
   // token. `promptTokenCount` overlaps `cachedContentTokenCount` the way `prompt_tokens` already
   // overlaps `cached_tokens` above, so the demo prices them the same way it prices OpenAI's.
   promptTokenCount: 0.002,
@@ -295,19 +493,6 @@ export const DEMO_CREDIT_RATES: Record<string, number> = {
   // The gateways report real spend too, already scaled by their recipe.
   cost: 0.001,
 };
-
-/** Undoes what this script wrote, bottom-up: archiving a parent orphans its active children. */
-async function archiveEntities(
-  client: Stigg,
-  customerId: string,
-  team: string | undefined,
-  agents: string[],
-  log: (message: string) => void,
-): Promise<void> {
-  if (agents.length) await client.v1Beta.customers.entities.archive(customerId, { ids: agents });
-  if (team) await client.v1Beta.customers.entities.archive(customerId, { ids: [team] });
-  log('  archived the agents, then the team');
-}
 
 /** Reads back what was just written. The tree lags by minutes in a real environment. */
 async function printTree(client: Stigg, demoEnv: DemoEnv): Promise<void> {
@@ -332,18 +517,17 @@ async function printTree(client: Stigg, demoEnv: DemoEnv): Promise<void> {
 async function main(): Promise<void> {
   const argv = process.argv.slice(2);
   // `env` is what any application has - which Stigg to talk to. `demoEnv` is what only a demo
-  // reads from a file: the tenant, the agent, what to gate on.
+  // reads from a file: the tenant, the agent, what to gate on, the plan a new customer starts on.
   const env = resolveStiggEnv();
   const demoEnv: DemoEnv = resolveDemoEnv(env);
   const mock = await maybeStartMockStiggServer(env.offline);
-  const baseUrl = mock?.baseUrl ?? env.baseUrl;
-  const apiKey = mock ? 'offline-mock' : requireKey(env);
+  const stigg = mock
+    ? new StiggAgentSDK({ baseUrl: mock.baseUrl })
+    : new StiggAgentSDK({ apiKey: requireKey(env), baseUrl: env.baseUrl });
 
   console.log(`Seeding Stigg: ${describeSetup(env, demoEnv)}\n`);
-  const client = new Stigg({ apiKey, ...(baseUrl ? { baseURL: baseUrl } : {}) });
-
   try {
-    const result = await setupGovernance(client, demoEnv, {
+    const result = await prepareDemo(env, demoEnv, stigg, mock, {
       // Every agent the examples use: the shared one for gateway/orchestrator, plus one per
       // client. With no agent id configured there are none to seed, and the examples run against
       // the customer's pool instead - which is a demo too, just a flatter one.
@@ -353,11 +537,13 @@ async function main(): Promise<void> {
       agentLimit: numberFlag(argv, 'agent-limit', 5),
       ...(argv.includes('--team-limit') ? { teamLimit: numberFlag(argv, 'team-limit', 10) } : {}),
       cadence: argv.includes('--cadence') ? argv[argv.indexOf('--cadence') + 1] : 'P1M',
-      poolMin: numberFlag(argv, 'pool-min', 500),
       governance: !flag(argv, 'no-governance'),
       archive: flag(argv, 'archive'),
     });
 
+    const client = new Stigg(
+      mock ? { apiKey: 'offline-mock', baseURL: mock.baseUrl } : { apiKey: requireKey(env), baseURL: env.baseUrl },
+    );
     if (result.governanceEnabled && !flag(argv, 'archive')) await printTree(client, demoEnv);
 
     console.log('\nDone. Notes:');
@@ -367,6 +553,7 @@ async function main(): Promise<void> {
       console.log('  - Running customer-level: denials will name the customer, not an agent.');
     }
   } finally {
+    await stigg.flush({ close: true });
     await mock?.close();
   }
 }

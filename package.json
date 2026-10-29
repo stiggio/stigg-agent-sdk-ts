@@ -1,6 +1,6 @@
 {
   "name": "@stigg/agent-sdk-js",
-  "version": "0.5.1",
+  "version": "0.6.0",
   "private": true,
   "description": "Stigg agent SDK (JS) - run-lifecycle governance for agentic stacks, with examples per layer",
   "license": "MIT",
@@ -43,7 +43,8 @@
     "example-gateway-bedrock": "tsx examples/gateway/bedrock.ts",
     "example-gateway-databricks": "tsx examples/gateway/databricks.ts",
     "example-orchestrator-langchain": "tsx examples/orchestrator/langchain.ts",
-    "example-orchestrator-langgraph": "tsx examples/orchestrator/langgraph.ts"
+    "example-orchestrator-langgraph-handoff": "tsx examples/orchestrator/langgraph-handoff.ts",
+    "example-orchestrator-langgraph-model-fallback": "tsx examples/orchestrator/langgraph-model-fallback.ts"
   },
   "dependencies": {
     "@stigg/node-server-sdk": "^6.1.0",

@@ -31,7 +31,7 @@ async function graph(agentBudget: number) {
     },
     agents: { planner: { stiggContext: { agentId: 'agent-1' }, tools: { web_search: credits } } },
   });
-  return { stigg, middleware, step: { agent: 'planner', customerId: CUSTOMER } };
+  return { stigg, middleware, step: { agent: 'planner', stiggContexts: [{ customerId: CUSTOMER }] } };
 }
 
 describe('OpenTelemetry spans', () => {

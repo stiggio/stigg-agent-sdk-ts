@@ -11,6 +11,7 @@
  */
 export {
   StiggLangChainCallbackHandler,
+  CONTEXT_METADATA_KEY,
   CUSTOMER_METADATA_KEY,
 } from '../bindings/orchestrator/langchain/callback-handler';
 export type { StiggLangChainCallbackOptions } from '../bindings/orchestrator/langchain/callback-handler';

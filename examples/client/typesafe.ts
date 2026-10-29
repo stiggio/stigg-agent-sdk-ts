@@ -24,9 +24,9 @@ import '../shared/load-env';
 import { choice, noul, score, TypeSafeClient } from '@typesafe-ai/sdk';
 import { StiggAgentSDK, normalizeUsage } from '../../src';
 import { maybeStartMockStiggServer } from '../shared/mock-stigg-server';
-import { seedMock } from '../shared/setup-governance';
+import { prepareDemo } from '../shared/setup-governance';
 import { agentIdFor, describeSetup, resolveDemoEnv, type DemoEnv } from '../shared/demo-env';
-import { requireKey, resolveStiggEnv, type StiggEnv } from '../shared/stigg-env';
+import { requireKey, resolveStiggEnv } from '../shared/stigg-env';
 import { optionalEnv } from './core/vendor';
 
 const MODEL = process.env.AGENT_SDK_TYPESAFE_MODEL ?? 'jev-latest';
@@ -134,24 +134,6 @@ function normalizeAnswer(answer: any): { value: number; label: string } {
   return { value: answer.score / (rungs - 1), label: answer.legend?.[answer.score] ?? String(answer.score) };
 }
 
-/** Everything the governance side needs, before a single question is asked. */
-async function startGovernance(env: StiggEnv, demoEnv: DemoEnv) {
-  const stiggMock = await maybeStartMockStiggServer(env.offline);
-  // The account's own setup: entity types, the parent team, a funded pool. Not the agent - that
-  // is this application's to provision, in `agentOptions` below.
-  if (stiggMock) {
-    await seedMock(demoEnv, stiggMock, {
-      agents: [],
-      teamLimit: AGENT_BUDGET * 2,
-      // The pool must dwarf the per-agent budget, or a denial would come from an empty wallet
-      // rather than from the budget this example is about.
-      poolMin: AGENT_BUDGET * 4,
-      log: () => undefined,
-    });
-  }
-  return stiggMock;
-}
-
 /** Prints the answers to one call. */
 function printAnswers(answers: Record<string, any>): void {
   for (const [key, answer] of Object.entries(answers)) {
@@ -172,7 +154,7 @@ async function main(): Promise<void> {
   const env = resolveStiggEnv();
   const demoEnv: DemoEnv = resolveDemoEnv(env);
 
-  const stiggMock = await startGovernance(env, demoEnv);
+  const stiggMock = await maybeStartMockStiggServer(env.offline);
   console.log(`[governance] ${describeSetup(env, demoEnv)}`);
 
   // The mock when one is running, the configured key otherwise - one argument, because it is
@@ -180,6 +162,13 @@ async function main(): Promise<void> {
   const stigg = stiggMock
     ? new StiggAgentSDK({ baseUrl: stiggMock.baseUrl })
     : new StiggAgentSDK({ apiKey: requireKey(env), baseUrl: env.baseUrl });
+  // The account's own setup, created if missing: entity types, the demo plan a new customer is
+  // provisioned onto, the parent team. Not the agent - that is this application's to provision.
+  await prepareDemo(env, demoEnv, stigg, stiggMock, {
+    agents: [],
+    teamLimit: AGENT_BUDGET * 2,
+    log: (line) => console.log(`[setup]${line}`),
+  });
 
   // The agent this analysis spends as. No AGENT_SDK_DEMO_AGENT_ID (or no agent type) and there is
   // no agent: the calls are checked against the customer's own pool instead.
@@ -189,6 +178,7 @@ async function main(): Promise<void> {
   if (typesafeAgentId && demoEnv.agentType) {
     await stigg.register({
       customerId: demoEnv.customerId,
+      defaultPlanId: demoEnv.planId,
       agentId: typesafeAgentId,
       entityTypeId: demoEnv.agentType.entityTypeId,
       displayName: 'TypeSafe document analysis',
@@ -218,6 +208,7 @@ async function main(): Promise<void> {
       attributionKey: demoEnv.agentType?.attributionKey,
       entitlement: demoEnv.entitlement,
       eventName: demoEnv.ingestEventName,
+      defaultPlanId: demoEnv.planId,
       // No `usageMapper`: the calls report TypeSafe's own two counters under TypeSafe's own names,
       // which is what reconciles against its invoice. To bill your own number instead, price them:
       //

@@ -31,6 +31,15 @@ describe('a default plan provisions the customers Stigg does not know', () => {
     assert.deepEqual(mock.state.subscriptionWrites, [{ customerId: 'customer-new', planId: plan }]);
   });
 
+  it('refuses a blank plan on register, rather than skip provisioning and fail on the entity write', async () => {
+    const { stigg, mock } = await newStigg();
+    await assert.rejects(
+      stigg.register({ customerId: 'customer-new', agentId: 'agent-a', entityTypeId: 'agent', defaultPlanId: ' ' }),
+      /register defaultPlanId is empty/,
+    );
+    assert.deepEqual(mock.state.provisionAttempts, []);
+  });
+
   it('reads an existing customer refused as a duplicate as existing, not as a failure', async () => {
     const errors: unknown[] = [];
     const { stigg, mock } = await newStigg({ onError: (error) => errors.push(error) });
@@ -51,6 +60,67 @@ describe('a default plan provisions the customers Stigg does not know', () => {
     const { stigg, mock } = await newStigg();
     await stigg.report({ customerId: 'customer-new', defaultPlanId: plan, ingestMode: 'sync' }, { credits: 1 });
     assert.deepEqual(mock.state.subscriptionWrites, [{ customerId: 'customer-new', planId: plan }]);
+  });
+
+  it('names the type of a plan id that is not a string, rather than call it empty', async () => {
+    const { stigg } = await newStigg();
+    await assert.rejects(
+      stigg.register({
+        customerId: 'customer-new',
+        agentId: 'agent-a',
+        entityTypeId: 'agent',
+        defaultPlanId: 42 as never,
+      }),
+      /register defaultPlanId must be a plan id string, not number/,
+    );
+  });
+
+  it("writes an empty budget.scope as the agent's whole budget, and refuses a blank entry", async () => {
+    const { stigg, mock } = await newStigg();
+    const budget = { entitlement: { currencyId: 'credits' }, limit: 50 };
+    await stigg.register({
+      customerId: 'customer-acme',
+      agentId: 'agent-a',
+      entityTypeId: 'agent',
+      budget: { ...budget, scope: [] },
+    });
+
+    assert.deepEqual(
+      mock.state.assignmentWrites.map((a) => [a.entityId, a.usageLimit, a.scopeEntityIds]),
+      [['agent-a', 50, []]],
+    );
+    await assert.rejects(
+      stigg.register({
+        customerId: 'customer-acme',
+        agentId: 'agent-b',
+        entityTypeId: 'agent',
+        budget: { ...budget, scope: [' '] },
+      }),
+      /budget\.scope that is not a list of entity ids/,
+    );
+  });
+
+  it('provisions on a register too, before the agent - an entity needs its customer to exist', async () => {
+    const { stigg, mock } = await newStigg();
+    // Refuses an entity for a customer it has not seen, so the order is what lets this pass.
+    mock.strictCustomers = true;
+    await stigg.register({
+      customerId: 'customer-new',
+      defaultPlanId: plan,
+      agentId: 'agent-x',
+      entityTypeId: 'agent',
+    });
+    assert.deepEqual(mock.state.provisionAttempts, ['customer-new']);
+    assert.deepEqual(mock.state.subscriptionWrites, [{ customerId: 'customer-new', planId: plan }]);
+    // Once per customer: the next register, and the first check, do not ask again.
+    await stigg.register({
+      customerId: 'customer-new',
+      defaultPlanId: plan,
+      agentId: 'agent-y',
+      entityTypeId: 'agent',
+    });
+    await stigg.check(newCustomer);
+    assert.deepEqual(mock.state.provisionAttempts, ['customer-new']);
   });
 
   it('provisions nobody when no plan is named', async () => {

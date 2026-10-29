@@ -135,6 +135,8 @@ export type EntityPlacement = {
    */
   usageLimitOnCreate?: number;
   cadence?: string;
+  /** The entities the budget is scoped to - its own assignment beside the agent's whole one. */
+  scopeEntityIds?: string[];
 };
 
 export type EntityInput = {

@@ -43,7 +43,16 @@ export type DemoEnv = {
   entitlement?: Entitlement;
   /** Overrides the event name a wrapped client would derive from the vendor call it gated. */
   ingestEventName?: EventIngest;
+  /**
+   * The free plan a customer Stigg does not know yet is provisioned onto - by the SDK, on its first
+   * call (`stiggContext.defaultPlanId`). The seed creates it if it is missing, carrying the demo's
+   * credits or feature, so a new customer arrives funded. Blank: nobody is provisioned.
+   */
+  planId?: string;
 };
+
+/** The demo plan's id when none is configured: one the seed itself creates, so safe to default. */
+export const DEMO_PLAN_ID = 'plan-agent-sdk-demo';
 
 /**
  * A demo fixture: its compiled-in default, but only against the mock, and only when the variable
@@ -149,6 +158,9 @@ export function resolveDemoEnv({ offline }: StiggEnv): DemoEnv {
     ingestEventName: process.env.AGENT_SDK_DEMO_EVENT_NAME
       ? { name: process.env.AGENT_SDK_DEMO_EVENT_NAME }
       : undefined,
+    // Defaulted live as well as offline, unlike the customer: the seed creates this plan, so the
+    // default names something that will exist rather than somebody else's data.
+    planId: process.env.AGENT_SDK_DEMO_PLAN_ID === undefined ? DEMO_PLAN_ID : text(process.env.AGENT_SDK_DEMO_PLAN_ID),
   };
 }
 

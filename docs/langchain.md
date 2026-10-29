@@ -37,15 +37,40 @@ const stiggHandler = new StiggLangChainCallbackHandler({
 
 await agent.invoke(input, {
   callbacks: [stiggHandler], // beside any other handler - Langfuse, LangSmith
-  metadata: { stiggCustomerId: 'customer-acme' }, // the customer, on every run
+  metadata: { stiggContext: { customerId: 'customer-acme' } }, // the customer, on every run
 });
 ```
 
 The handler is built once and passed on every `invoke`. The customer changes per request, so it
 rides the run's `metadata` rather than the handler; a single-tenant application can put a default
-in `stiggContext: { customerId }` instead. A run with neither is refused before its first step. A
-run's `stiggCustomerId` wins over the default, so it must come from your server - see
-[who names the customer](#who-names-the-customer).
+in the handler's `stiggContext: { customerId }` instead. A run with neither is refused before its
+first step.
+
+The run's `stiggContext` is the same type, and the same override, as the one `wrap` takes per call:
+the customer, `dimensions`, or anything else a call can set, applied over the handler's and the
+agent's. It wins over both, so it must come from your server - see
+[who names the customer](#who-names-the-customer). (`metadata.stiggCustomerId`, from before a run
+took a whole `stiggContext`, still names the customer, and is deprecated. A `stiggContext` naming a
+different customer beside it is refused.)
+
+A node can state a `stiggContext` for one call of its own, too - a dimension that call alone
+carries, say:
+
+```ts
+await model.invoke(messages, {
+  ...config,
+  metadata: { ...config.metadata, stiggContext: { dimensions: { model: 'claude-opus-5' } } },
+});
+```
+
+LangChain merges `metadata` one key deep, so that call's `stiggContext` would replace the run's,
+customer and all. The handler puts the run's back underneath: each `stiggContext` stated on the way
+down the run tree is applied in turn, the innermost last. That needs the handler on `invoke`, where
+it sees every run start: given to a model or a tool alone, it never sees the run above, and a call's
+own `stiggContext` is all the call gets.
+
+A tool's own entitlement stays its own: a run's `stiggContext` naming another entitlement re-prices
+the model calls beneath it, not the tools you set a price on in `tools`.
 
 What happens on each step:
 
@@ -55,7 +80,7 @@ What happens on each step:
 | A governed tool | checked against the tool's entitlement, when it has one | its `usage` reported, or one unit                                                                                                     |
 | Any other tool  | nothing                                                 | nothing                                                                                                                               |
 
-A step that fails is billed nothing. A refusal is thrown as `AccessDeniedError` from inside the
+A step that fails reports nothing. A refusal is thrown as `AccessDeniedError` from inside the
 step, which is the only way a callback can stop LangChain; what it means is up to the graph - see
 [when Stigg refuses](#when-stigg-refuses).
 
@@ -88,7 +113,7 @@ new StiggLangChainCallbackHandler({
 ```
 
 Every model call in the graph - the lead's, and every sub-agent's - is checked against the
-customer's credits and billed to them. This is the basic use: the same check-then-report a wrapped
+customer's credits and reported for them. This is the basic use: the same check-then-report a wrapped
 client does, applied to every step of the graph.
 
 - `usageMapper` turns a call's usage into what is reported, exactly as it does for
@@ -131,15 +156,15 @@ new StiggLangChainCallbackHandler({
 });
 ```
 
-Each step is checked and billed as the agent that took it, against that agent's own budget - and,
+Each step is checked and reported as the agent that took it, against that agent's own budget - and,
 through the parent, the graph's. One agent running dry refuses that agent's steps and nothing else.
 
 - **Keys.** A step belongs to the nearest run above it named for an agent in `agents`: a
   `createAgent` or `createReactAgent` by its `name`, or a node of a hand-built LangGraph
-  `StateGraph` by its own. That is LangChain's run tree, so a sub-agent is billed as itself even
+  `StateGraph` by its own. That is LangChain's run tree, so a sub-agent is reported as itself even
   when the tool that runs it passes on its parent's config - and the `lc_agent_name` in a run's
   metadata, which a caller can set, never decides whose budget pays.
-- **Name every sub-agent.** One with no name, or a name `agents` does not list, is billed as the
+- **Name every sub-agent.** One with no name, or a name `agents` does not list, is reported as the
   nearest listed agent above it - usually its parent. In a hand-built graph, name a node after the
   agent it runs, a subgraph's node included: the node's name is what the tree sees.
 - **A top-level agent: set `rootAgent`.** The run you `invoke` is named by whoever invokes it -
@@ -149,11 +174,71 @@ through the parent, the graph's. One agent running dry refuses that agent's step
   after, the SDK says so once.
 - **One context per step, not two.** An agent's `stiggContext` is laid over the shared one, field
   by field. Each step is checked once and reported once, under the merged context - an agent that
-  sets only `agentId` still uses the shared `entitlement` and `usageMapper`. Nothing is billed twice.
+  sets only `agentId` still uses the shared `entitlement` and `usageMapper`. Nothing is reported twice.
 - **An agent left out** runs under the shared context alone - at the customer level, unless that
   context names an agent - and the SDK warns once that it was not listed.
 - **`idempotencyKey` is refused** on both contexts: every step would share it, and only the first
-  would be billed. Each step is keyed by its own id.
+  would be reported. Each step is keyed by its own id.
+
+### Budgets per model
+
+One agent can hold a budget per model it calls, so one model running dry leaves the others open.
+Each model is an entity of a dimensional type, and the agent's budget is scoped to each:
+
+```ts
+// Once per environment: a type whose attribution key is the dimension a call names its model by -
+// through Stigg's own API client (`npm install @stigg/typescript`), since entity types are
+// configuration, not something a call carries.
+import Stigg from '@stigg/typescript';
+const stiggClient = new Stigg({ apiKey: process.env.STIGG_SERVER_API_KEY });
+await stiggClient.v1Beta.entityTypes.upsert({
+  types: [{ id: 'model', attributionKeys: ['model'], displayName: 'Model' }],
+});
+
+// Once per customer: the agent's whole budget, then each model and a budget per model on the
+// agent - one register per scope, since each scope is its own budget.
+const agent = { customerId, agentId: 'agent-assistant', entityTypeId: 'agent' };
+await stigg.register({ ...agent, budget: { entitlement: credits, limit: 54, cadence: 'P1M' } });
+for (const [model, limit] of [
+  ['claude-opus-5', 4],
+  ['claude-haiku-5-5', 50],
+] as const) {
+  await stigg.register({ customerId, agentId: model, entityTypeId: 'model' });
+  await stigg.register({ ...agent, budget: { entitlement: credits, limit, cadence: 'P1M', scope: [model] } });
+}
+
+new StiggLangChainCallbackHandler({
+  stigg,
+  stiggContext: { attributionKey: 'agentId', entitlement: credits, ingestMode: 'sync' },
+  agents: { assistant: { stiggContext: { agentId: 'agent-assistant' } } },
+});
+```
+
+- **The model is a dimension you state,** like any other: on the model call's own `stiggContext`
+  (see [one handler per graph](#one-handler-per-graph)). Stigg resolves it to the model's entity,
+  and the budget scoped to that model applies to that call alone. The handler adds no dimension of
+  its own - the key and the value are yours.
+- **Price models apart** in the same `stiggContext`, with that model's `usageMapper`.
+- **Refusing one model leaves the others open.** The graph decides what to do with the refusal -
+  in one node, catch it and call the cheaper model:
+
+  ```ts
+  const asModel = (model: string, usageMapper: MetricsMapper) => ({
+    ...config,
+    metadata: { ...config.metadata, stiggContext: { dimensions: { model }, usageMapper } },
+  });
+  try {
+    return { answer: (await opus.invoke(messages, asModel('claude-opus-5', opusPrice))).text };
+  } catch (err) {
+    if (!stigg.denial(err)) throw err;
+    return { answer: (await haiku.invoke(messages, asModel('claude-haiku-5-5', haikuPrice))).text };
+  }
+  ```
+
+- **A scoped budget covers only the model it names.** A call naming no model, or a model with no
+  budget of its own, is limited by the agent's whole budget and its ancestors' alone - with neither,
+  by nothing. Register the whole budget too, as above; the per-model budgets narrow what a model may
+  spend, inside it.
 
 ### A hand-built LangGraph
 
@@ -168,11 +253,11 @@ const graph = new StateGraph(Turn)
   // ...edges
   .compile();
 
-await graph.invoke(input, { callbacks: [stiggHandler], metadata: { stiggCustomerId } });
+await graph.invoke(input, { callbacks: [stiggHandler], metadata: { stiggContext: { customerId } } });
 ```
 
 Inside a `createAgent`, the agent's name wins over its internal nodes; in a hand-built graph the
-node is the agent. A tool that runs in a node of its own - LangGraph's `ToolNode` - is billed to
+node is the agent. A tool that runs in a node of its own - LangGraph's `ToolNode` - is reported for
 the agent whose model called it, not to the `tools` node.
 
 ## Tools
@@ -199,7 +284,7 @@ new StiggLangChainCallbackHandler({
 
     // Every tool not named here...
     '*': { currencyId: 'credits' },
-    // ...except a sub-agent held as a tool, whose own model calls are already billed.
+    // ...except a sub-agent held as a tool, whose own model calls are already reported.
     researcher: false,
   },
 });
@@ -218,35 +303,36 @@ new StiggLangChainCallbackHandler({
   `usageMapper` does. One that throws is a metering failure, reported through `onError`; the run
   goes on.
 - **Double billing.** In LangChain, a sub-agent is often a tool of its parent (`tool(() =>
-researcher.invoke(...))`). Its model calls are already checked and billed as it, so under `'*'`
+researcher.invoke(...))`). Its model calls are already checked and reported as it, so under `'*'`
   mark that tool `false`. The SDK cannot tell a sub-agent from any other tool, so it does not guess.
 - **Per agent.** `agents.<name>.tools` is laid over the shared `tools`, name by name: an agent can
   add a paid tool of its own, or set a shared one to `false` to be exempt from it. `'*': false`
   opts the agent out of the catch-all only - a tool the shared `tools` names is still governed
   until the agent names it `false` too.
-- **Who pays.** A tool is billed to the agent whose model called it, under that agent's context.
+- **Who pays.** A tool is reported for the agent whose model called it, under that agent's context.
 - **A packaged tool with no name.** A class-based tool like `TavilySearch` reaches the handler
   without its name, which is then taken from the model's tool call - remembered in the process
   that issued it. A run resumed on another process has no such call: its result still carries the
-  tool's name, so it is billed when it ends, but it runs unchecked, and the SDK warns once. A node
+  tool's name, so it is reported when it ends, but it runs unchecked, and the SDK warns once. A node
   that invokes the tool directly (`tool.invoke({ q })`) has neither a call nor a named result: it is
   not checked and cannot be priced, and the SDK warns once per kind of tool - it may be a free one. Only `'*'` covers both -
   use it to govern packaged tools.
-- **Only a call that succeeded is billed**, once, keyed by the model's tool-call id. A call that
-  runs again - a retry, a resumed graph - is checked again and billed under the same key.
+- **Only a call that succeeded is reported**, once, keyed by the model's tool-call id. A call that
+  runs again - a retry, a resumed graph - is checked again and reported under the same key.
 - Every entry is validated when the handler is built: one with neither an entitlement nor a
   `usage` is refused, since it would do nothing, and so is one that mixes the short form with
   `usage` (`{ currencyId, usage }`) - write it as `{ entitlement: { currencyId }, usage }`.
 
 ## Who names the customer
 
-`stiggCustomerId` decides whose budget a run spends and whose entitlement it is checked against,
-and a run's metadata wins over the handler's default. So it must be set by your server, from the
+The run's `stiggContext` - the one on `invoke` - decides whose budget a run spends. So it names
+only the customer and a `correlationId`; anything else there is refused, and belongs on the handler,
+under `agents`, or in a node's own config. The customer must still be set by your server, from the
 authenticated user - never passed through from the request.
 
 - **In your own server**, set it where you call `invoke`, from your session or auth layer.
 - **On LangGraph Platform**, the client sends the run's `metadata`, so a caller could name another
-  customer. Set `stiggCustomerId` server-side instead - in your
+  customer. Set `stiggContext` server-side instead - in your
   [custom auth](https://langchain-ai.github.io/langgraph/concepts/auth/) handler, from the
   authenticated identity - and ignore or overwrite any value the client sent. The client can name
   the run too, so set `rootAgent` on the handler rather than trust the run's name.
@@ -287,7 +373,7 @@ const research = tool(
 
 // The top of the graph.
 try {
-  await lead.invoke(input, { callbacks: [stiggHandler], metadata: { stiggCustomerId } });
+  await lead.invoke(input, { callbacks: [stiggHandler], metadata: { stiggContext: { customerId } } });
 } catch (err) {
   const decision = stigg.denial(err);
   if (!decision) throw err;
@@ -321,17 +407,26 @@ same options and knows no framework. A harness of your own can drive it directly
 ```ts
 const middleware = stigg.middleware({ stiggContext, tools, agents });
 
-await middleware.startModel(stepId, { agent: 'planner', customerId }, 'my-harness.model'); // throws on refusal
+const step = { agent: 'planner', stiggContexts: [{ customerId }] }; // outermost first, as wrap applies a call's
+await middleware.startModel(stepId, step, 'my-harness.model'); // throws on refusal
 await middleware.endModel(stepId, { metrics: { credits: 1 } });
-await middleware.startTool(toolStepId, { name: 'web_search', input }, { agent: 'planner', customerId });
+await middleware.startTool(toolStepId, { name: 'web_search', input }, step);
 await middleware.endTool(toolStepId, output);
 ```
+
+## Upgrading from 0.5
+
+- **`metadata.stiggCustomerId`** still works, and warns once: pass
+  `metadata: { stiggContext: { customerId } }` instead. It will be removed in a later 0.x release.
+  A `stiggContext` beside it may name the same customer and a `correlationId`, nothing more.
+- **`StepAttribution.customerId`** is gone, for a harness driving `stigg.middleware` directly: pass
+  `stiggContexts: [{ customerId }]`. A step that still names `customerId` is refused, saying so.
 
 ## Known limits
 
 - **Completion models report usage once per batch.** A batch of prompts reports its whole token
   usage on its first run, and a streamed completion reports none at all - which is said as a
-  metering failure rather than billed as zero.
+  metering failure rather than reported as zero.
 - **No reservation.** A check does not hold budget, so parallel tool calls from one agent can each
   pass and together overshoot.
 - **Rounding per call.** Each report is a whole unit per entity, so many small calls round up more
@@ -341,14 +436,24 @@ await middleware.endTool(toolStepId, output);
 
 ## Run it
 
-Two examples build the same chat - a lead, a researcher with a paid search, a writer, and a
-generalist as the fallback - once with `createAgent` and once as a hand-built `StateGraph`, with
-the same Stigg configuration. Both run with no keys at all:
+All three run with no keys at all. The sources are in
+[`examples/orchestrator/`](../examples/orchestrator/).
+
+**Handing off between agents.** Two examples build the same chat - a lead, a researcher with a paid
+search, a writer, and a generalist as the fallback - once with `createAgent` and once as a
+hand-built `StateGraph`, with the same Stigg configuration. The researcher runs out of credits in
+the fourth turn, and the lead takes another pass with the generalist:
 
 ```bash
 yarn example-orchestrator-langchain
-yarn example-orchestrator-langgraph
+yarn example-orchestrator-langgraph-handoff
 ```
 
-The researcher runs out of credits in the fourth turn, and the lead takes another pass with the
-generalist. The sources are in [`examples/orchestrator/`](../examples/orchestrator/).
+**Falling back to a cheaper model.** One LangGraph agent, in one node, with a budget per model - see
+[budgets per model](#budgets-per-model). It answers with Opus until Opus's own budget runs out; the
+node catches the refusal and answers with Haiku in the same turn, and the next turn tries Opus first
+again, so a top-up or a new period brings it back:
+
+```bash
+yarn example-orchestrator-langgraph-model-fallback
+```

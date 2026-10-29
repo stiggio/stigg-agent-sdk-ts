@@ -104,6 +104,8 @@ export class RestGovernanceEngine implements GovernanceEngine {
             ...capability,
             // Tri-state: omitted leaves the parent alone, null makes it a root, an id re-homes it.
             ...(placement.parentId === undefined ? {} : { parentId: placement.parentId }),
+            // Part of the assignment's identity: a scoped budget is its own row beside the whole one.
+            ...(placement.scopeEntityIds ? { scopeEntityIds: placement.scopeEntityIds } : {}),
             ...budget,
           },
         ],
@@ -128,13 +130,17 @@ export class RestGovernanceEngine implements GovernanceEngine {
     if (placement.usageLimit !== undefined) return { usageLimit: placement.usageLimit, ...cadence };
     if (placement.usageLimitOnCreate === undefined) return cadence;
 
-    const existing = await this.client.v1Beta.customers.assignments.list(customerId, {
-      entityId,
-      ...capability,
-      limit: 1,
-    });
-    // Already assigned: leave the limit and its window exactly as they are.
-    if (existing.data.length > 0) return {};
+    // An assignment is the `(entity, capability, scope)` triple, so "exists" means one with this
+    // scope - the agent's whole budget existing says nothing about its per-model one.
+    // Encoded whole, not joined: an id may hold a comma, and ['a,b'] is not ['a', 'b'].
+    const scopeOf = (ids: readonly string[] | null | undefined) => JSON.stringify([...(ids ?? [])].sort());
+    const scope = scopeOf(placement.scopeEntityIds);
+    // Every page: the one with this scope can sit past the first, and missing it would overwrite
+    // an admin's limit with the seed.
+    for await (const row of this.client.v1Beta.customers.assignments.list(customerId, { entityId, ...capability })) {
+      // Already assigned: leave the limit and its window exactly as they are.
+      if (scopeOf(row.scopeEntityIds) === scope) return {};
+    }
     return { usageLimit: placement.usageLimitOnCreate, ...cadence };
   }
 

@@ -9,6 +9,7 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { RestGovernanceEngine } from '../src/engine/rest-governance-engine';
 import type { EntityPlacement } from '../src/engine/engine';
+import { assignmentsOf, seedBudget, startMockStiggServer } from '../testing/mock-stigg-server';
 
 type Sent = Record<string, unknown>;
 
@@ -23,9 +24,12 @@ function engineWith(existing: unknown[]): { engine: RestGovernanceEngine; sent: 
         customers: {
           entities: { upsert: async () => ({ data: [] }) },
           assignments: {
-            list: async (_customerId: string, params: Sent) => {
+            // Pages like the client's: iterated, one row at a time, across however many pages.
+            list: (_customerId: string, params: Sent) => {
               listed.push(params);
-              return { data: existing };
+              return (async function* () {
+                yield* existing;
+              })();
             },
             upsert: async (_customerId: string, body: { assignments: Sent[] }) => {
               sent.push(body.assignments[0]!);
@@ -56,9 +60,75 @@ describe('provisioning a budget', () => {
     const { engine, sent, listed } = engineWith([]);
     await engine.upsertEntity('c', entity, { ...base, usageLimitOnCreate: 40 });
 
-    assert.deepEqual(listed[0], { entityId: 'agent-1', currencyId: 'data_credit', limit: 1 });
+    // Every assignment for the pair, not the first: with scopes there can be one per scope.
+    assert.deepEqual(listed[0], { entityId: 'agent-1', currencyId: 'data_credit' });
     assert.equal(sent[0]!.usageLimit, 40);
     assert.equal(sent[0]!.cadence, 'P1M');
+  });
+
+  it('usageLimitOnCreate seeds a scoped budget though the agent already has one for another scope', async () => {
+    const { engine, sent } = engineWith([{ id: 'whole', usageLimit: 80, scopeEntityIds: [] }]);
+    await engine.upsertEntity('c', entity, { ...base, usageLimitOnCreate: 40, scopeEntityIds: ['claude-opus-5'] });
+
+    assert.equal(sent[0]!.usageLimit, 40, 'its own scope has no assignment yet');
+    assert.deepEqual(sent[0]!.scopeEntityIds, ['claude-opus-5']);
+  });
+
+  it('finds a scoped budget past the first page, rather than overwrite its limit with the seed', async () => {
+    // The real client against a server that pages: twenty-five other scopes ahead of it.
+    const mock = await startMockStiggServer();
+    try {
+      const budget = { entityId: 'agent-1', capabilityId: 'data_credit', parentId: 'team-1' };
+      for (let n = 0; n < 25; n++)
+        seedBudget(mock.state, 'c', { ...budget, usageLimit: 10, scopeEntityIds: [`model-${n}`] });
+      seedBudget(mock.state, 'c', { ...budget, usageLimit: 80, scopeEntityIds: ['claude-opus-5'] });
+      const engine = new RestGovernanceEngine({ apiKey: 'offline-mock', baseUrl: mock.baseUrl });
+
+      await engine.upsertEntity('c', entity, { ...base, usageLimitOnCreate: 40, scopeEntityIds: ['claude-opus-5'] });
+
+      assert.ok(mock.state.assignmentPages.length > 1, 'read past the first page');
+      const opus = assignmentsOf(mock.state, 'c').find((a) => a.scopeEntityIds.includes('claude-opus-5'));
+      assert.equal(opus?.usageLimit, 80, 'the existing limit is left alone');
+    } finally {
+      await mock.close();
+    }
+  });
+
+  it("usageLimitOnCreate seeds the agent's whole budget though it has scoped ones", async () => {
+    const { engine, sent } = engineWith([{ id: 'opus', usageLimit: 80, scopeEntityIds: ['claude-opus-5'] }]);
+    await engine.upsertEntity('c', entity, { ...base, usageLimitOnCreate: 40 });
+
+    assert.equal(sent[0]!.usageLimit, 40, 'a scoped budget is not the whole one');
+  });
+
+  it('matches a scope whatever order its ids are listed in', async () => {
+    const { engine, sent } = engineWith([{ id: 'pair', usageLimit: 80, scopeEntityIds: ['b', 'a'] }]);
+    await engine.upsertEntity('c', entity, { ...base, usageLimitOnCreate: 40, scopeEntityIds: ['a', 'b'] });
+
+    assert.ok(!('usageLimit' in sent[0]!), 'the same scope - left alone');
+  });
+
+  it('tells a scope of one id holding a comma from a scope of two ids', async () => {
+    const { engine, sent } = engineWith([{ id: 'one', usageLimit: 80, scopeEntityIds: ['a,b'] }]);
+    await engine.upsertEntity('c', entity, { ...base, usageLimitOnCreate: 40, scopeEntityIds: ['a', 'b'] });
+
+    assert.equal(sent[0]!.usageLimit, 40, 'a different scope - seeded');
+  });
+
+  it("keeps the mock's assignments for ['a,b'] and ['a', 'b'] apart", async () => {
+    const mock = await startMockStiggServer();
+    try {
+      const budget = { entityId: 'agent-1', capabilityId: 'data_credit' };
+      seedBudget(mock.state, 'c', { ...budget, usageLimit: 10, scopeEntityIds: ['a,b'] });
+      seedBudget(mock.state, 'c', { ...budget, usageLimit: 20, scopeEntityIds: ['a', 'b'] });
+
+      assert.deepEqual(
+        assignmentsOf(mock.state, 'c').map((a) => a.usageLimit),
+        [10, 20],
+      );
+    } finally {
+      await mock.close();
+    }
   });
 
   it('usageLimitOnCreate leaves an existing budget alone - an admin raise survives the next run', async () => {

@@ -201,12 +201,13 @@ function agentDimension(context: StiggContext): Record<string, string> | undefin
  * A plan id as given, trimmed - or a refusal when it was given blank. Absent stays absent: no
  * plan is a legal choice, while an empty one is a typo that would provision nobody onto nothing.
  */
-function planId(value: unknown): string | undefined {
+export function planId(value: unknown, field = 'stiggContext.defaultPlanId'): string | undefined {
   if (value === undefined) return undefined;
-  const named = typeof value === 'string' ? value.trim() : '';
+  if (typeof value !== 'string') throw new Error(`${field} must be a plan id string, not ${typeof value}.`);
+  const named = value.trim();
   if (!named) {
     throw new Error(
-      'stiggContext.defaultPlanId is empty - leave the field out to provision no plan, or name the ' +
+      `${field} is empty - leave the field out to provision no plan, or name the ` +
         'plan new customers should start on.',
     );
   }
@@ -338,7 +339,35 @@ function assertKnownContext(context: StiggContext, where: 'stiggContext' | "wrap
         `governed by whatever remained instead. Valid fields: ${Object.keys(CONTEXT_KEYS).join(', ')}.`,
     );
   }
+  // The shapes a JavaScript caller - or a run's metadata - can get wrong without a compiler to say
+  // so: each would otherwise surface later as a bare TypeError, or as a call that looks unmetered.
+  for (const key of STRING_FIELDS) {
+    const value = context[key];
+    if (value !== undefined && typeof value !== 'string') {
+      throw new Error(`${where}.${key} must be a string, not ${typeof value}.`);
+    }
+  }
+  if (context.usageMapper !== undefined && typeof context.usageMapper !== 'function') {
+    throw new Error(`${where}.usageMapper must be a function, not ${typeof context.usageMapper}.`);
+  }
+  const { dimensions } = context;
+  if (
+    dimensions !== undefined &&
+    (typeof dimensions !== 'object' || dimensions === null || Array.isArray(dimensions))
+  ) {
+    throw new Error(`${where}.dimensions must be an object of dimension values.`);
+  }
+  // Values are matched against entity ids, which are strings: a number would match nothing, and
+  // the call would look attributed while governing nothing. An absent one is left to mean absent.
+  for (const [key, value] of Object.entries(dimensions ?? {})) {
+    if (value !== undefined && typeof value !== 'string') {
+      throw new Error(`${where}.dimensions.${key} must be a string, not ${typeof value}.`);
+    }
+  }
 }
+
+/** The fields that are strings or absent. The customer and the plan say so in messages of their own. */
+const STRING_FIELDS = ['agentId', 'attributionKey', 'idempotencyKey', 'correlationId'] as const;
 
 /**
  * One call's override, applied over what `wrap` already resolved.

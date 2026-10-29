@@ -43,7 +43,7 @@ import type { ClientRegistry } from './bindings/client/core/types';
 import { wrapClient } from './bindings/client/core/wrap-client';
 import { createAgentMiddleware, resolveAgents } from './bindings/orchestrator/core/agent-middleware';
 import { observedMeasurement } from './bindings/shared/token-usage';
-import { isEnforced, noCustomer, overrideContext, resolveContext } from './core/context';
+import { isEnforced, noCustomer, overrideContext, planId, resolveContext } from './core/context';
 import type { ContextDefaults } from './core/context';
 import type { ResolvedContext, StiggContext } from './core/context';
 import { GovernanceSession } from './core/session';
@@ -178,7 +178,7 @@ function toOptions(
 function toPlacement(input: RegisterInput): EntityPlacement | undefined {
   if (!input.budget) return undefined;
 
-  const { entitlement, cadence, parentId } = input.budget;
+  const { entitlement, cadence, parentId, scope } = input.budget;
   // A placement writes an assignment against the entitlement, so an empty one persists a budget
   // attached to nothing rather than merely routing badly.
   const invalid = entitlementError(entitlement);
@@ -197,12 +197,21 @@ function toPlacement(input: RegisterInput): EntityPlacement | undefined {
         'nothing to write without `budget.limit`.',
     );
   }
+  // Each entry names an entity, and a blank one names none: the budget would be scoped to an
+  // entity no request resolves, and apply to nothing.
+  if (scope !== undefined && (!Array.isArray(scope) || scope.some((id) => typeof id !== 'string' || !id.trim()))) {
+    throw new Error(
+      `Agent ${input.agentId} has a budget.scope that is not a list of entity ids: ${JSON.stringify(scope)}. ` +
+        'Leave it out, or pass [], for the whole budget.',
+    );
+  }
   return {
     parentId,
     entitlement,
     cadence,
     usageLimit: onCreate ? undefined : input.budget.limit,
     usageLimitOnCreate: onCreate ? (input.budget.limit ?? undefined) : undefined,
+    scopeEntityIds: scope?.length ? scope : undefined,
   };
 }
 
@@ -339,6 +348,8 @@ export class StiggAgentSDK {
     if (typeof agentId !== 'string' || !agentId.trim()) {
       throw new Error('register needs an agentId - an empty one provisions an entity nobody can name.');
     }
+    // Validated by presence, not truthiness: a blank plan is a typo, not a request for none.
+    const defaultPlanId = planId(input.defaultPlanId, 'register defaultPlanId');
     const placement = toPlacement(input);
     const key = `${customerId}:${agentId}`;
     // Memoized on the description, not just the pair: a second call describing the agent
@@ -361,6 +372,9 @@ export class StiggAgentSDK {
     // built: `run()` already validates in this order, and a malformed call that reports itself as
     // a probe timeout sends the reader looking at the network for a typo they can see.
     await this.ensureStarted();
+    // The customer before the agent: an entity is created under a customer, so one Stigg has never
+    // seen would be refused. The same once-per-customer provisioning every check does.
+    if (defaultPlanId) await this.provisionCustomer(customerId, defaultPlanId);
     if (!this.engine.capabilities.provisioning) {
       // Only a call that asked for something governance-only is an error. A budget or a parent
       // cannot be honoured, and carrying on would leave an agent that looks governed with a

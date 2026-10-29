@@ -1,5 +1,5 @@
 /**
- * The LangGraph orchestrator example, run for real: the same flow as the LangChain one, built as a
+ * The LangGraph handoff example, run for real: the same flow as the LangChain one, built as a
  * hand-built `StateGraph`, with the same Stigg integration - so the same outcomes.
  */
 import assert from 'node:assert/strict';
@@ -12,9 +12,9 @@ import { EXAMPLE_ENV } from './pinned-demo-env';
 const run = promisify(execFile);
 const PACKAGE_ROOT = join(__dirname, '..');
 
-describe('the LangGraph orchestrator example', () => {
+describe('the LangGraph handoff example', () => {
   it('governs each node as its agent, and routes around a refused researcher', async () => {
-    const pending = run('yarn', ['tsx', 'examples/orchestrator/langgraph.ts'], {
+    const pending = run('yarn', ['tsx', 'examples/orchestrator/langgraph-handoff.ts'], {
       cwd: PACKAGE_ROOT,
       env: { ...process.env, ...EXAMPLE_ENV },
       timeout: 120_000,

@@ -95,13 +95,12 @@ describe('a default plan sits beside the customer, not inside it', () => {
 
   for (const blank of ['', '   ', null, 0]) {
     it(`throws on ${JSON.stringify(blank)} rather than provisioning onto nothing`, () => {
-      assert.throws(
-        () => overrideContext(base, { defaultPlanId: blank as unknown as string }),
-        /defaultPlanId is empty/,
-      );
+      // A blank string is called empty; anything else is named by its type, not called empty.
+      const said = typeof blank === 'string' ? /defaultPlanId is empty/ : /defaultPlanId must be a plan id string/;
+      assert.throws(() => overrideContext(base, { defaultPlanId: blank as unknown as string }), said);
       assert.throws(
         () => resolveContext({ defaultPlanId: blank as unknown as string }, 'run-1', { requireCustomer: false }),
-        /defaultPlanId is empty/,
+        said,
       );
     });
   }

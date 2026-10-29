@@ -407,8 +407,9 @@ export type ClientContext = Omit<StiggContext, 'idempotencyKey'> & { idempotency
  * agent and nothing else.
  *
  * The customer is the one thing usually left out, because that changes per request: it rides each
- * run instead, wherever the binding says (on LangChain, `metadata.stiggCustomerId`), and wins over a
- * default here. Set it server-side, from the authenticated user, never from the request.
+ * run instead, in the run's own `stiggContext` - the per-call override `wrap` takes - wherever the
+ * binding says (on LangChain, `metadata.stiggContext`), and wins over a default here. Set it
+ * server-side, from the authenticated user, never from the request.
  */
 export type MiddlewareOptions = {
   /**
@@ -550,6 +551,18 @@ export type AgentBudget = {
   cadence?: string;
   /** Places the agent under a parent entity. Tri-state: omit to leave it, null to make it a root. */
   parentId?: string | null;
+  /**
+   * Narrows the budget to requests whose resolved entities include every one of these - a budget
+   * per value of a dimension, such as one per model: register each model as an entity of a type
+   * whose attribution key is the dimension, then scope one budget to each. Each scope is its own
+   * budget on the agent, so register once per scope. Omitted or empty, the budget is the agent's
+   * whole one.
+   *
+   * A scoped budget governs only the requests it names: one naming no model, or a model with no
+   * budget, is limited by the agent's whole budget and its ancestors' alone - with neither, by
+   * nothing. Register the whole budget too.
+   */
+  scope?: string[];
 } & (
   | {
       /** The limit, written on every call. `null` clears whatever is assigned. */
@@ -576,7 +589,15 @@ export type AgentScope = {
 };
 
 /** `register` - the standalone call, which has no run to take the scope from. */
-export type RegisterInput = AgentOptions & AgentScope;
+export type RegisterInput = AgentOptions &
+  AgentScope & {
+    /**
+     * The plan to provision the customer onto first, when Stigg does not know them yet - the same
+     * provisioning a check with `stiggContext.defaultPlanId` does, once per customer per process.
+     * Without it, registering under a customer Stigg has never seen fails: an entity needs one.
+     */
+    defaultPlanId?: string;
+  };
 
 /** `deregister` - archiving the entity. No entitlement: an entity is not archived per-entitlement. */
 export type DeregisterInput = Pick<AgentScope, 'customerId'> & Pick<AgentOptions, 'agentId'>;

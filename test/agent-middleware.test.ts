@@ -11,7 +11,7 @@ import { newStigg } from './stigg-harness';
 
 const CUSTOMER = 'customer-acme';
 const credits = { currencyId: 'credits' } as const;
-const lead = { agent: 'lead', customerId: CUSTOMER };
+const lead = { agent: 'lead', stiggContexts: [{ customerId: CUSTOMER }] };
 
 /**
  * A graph with one listed agent, `lead`, governed as `agent-1` and gating on credits, with every
@@ -108,6 +108,110 @@ describe('stigg.middleware, driven by a harness of its own', () => {
   });
 });
 
+describe("a run's stiggContexts", () => {
+  it("apply over the configuration in order, the way wrap applies a call's - the inner one winning, dimensions merged by key", async () => {
+    const { stigg, mock } = await newStigg({ agentBudget: 100 });
+    const checked: Record<string, string>[] = [];
+    const middleware = stigg.middleware({
+      stiggContext: { entitlement: credits, ingestMode: 'sync', dimensions: { region: 'eu', model: 'default' } },
+      hooks: { onDecision: (_decision, context) => checked.push(context.dimensions) },
+    });
+
+    // The run's, then the one a node set for its own model call.
+    const stiggContexts = [
+      { customerId: CUSTOMER, dimensions: { model: 'claude-opus-5' } },
+      { dimensions: { model: 'claude-haiku-5-5' } },
+    ];
+    await middleware.startModel('m1', { stiggContexts }, 'h.model');
+    await middleware.endModel('m1', { metrics: { credits: 1 } });
+    await stigg.flush();
+
+    assert.deepEqual(checked[0], { region: 'eu', model: 'claude-haiku-5-5' });
+    assert.equal((mock.state.dimensionsSeen.at(-1) as { model?: string }).model, 'claude-haiku-5-5');
+  });
+
+  it('keep dimensions named like an Object.prototype member', async () => {
+    const { stigg } = await newStigg({ agentBudget: 100 });
+    const checked: Record<string, string>[] = [];
+    const middleware = stigg.middleware({
+      stiggContext: { entitlement: credits, ingestMode: 'sync' },
+      hooks: { onDecision: (_decision, context) => checked.push(context.dimensions) },
+    });
+
+    await middleware.startModel(
+      'm1',
+      { stiggContexts: [{ customerId: CUSTOMER, dimensions: { constructor: 'x', toString: 'y' } }] },
+      'h.model',
+    );
+
+    assert.equal(Object.hasOwn(checked[0]!, 'constructor') && checked[0]!.constructor, 'x');
+    assert.equal(Object.hasOwn(checked[0]!, 'toString') && checked[0]!.toString, 'y');
+  });
+
+  it('are refused an idempotencyKey, which would dedupe every step beneath the run into one', async () => {
+    const { stigg } = await newStigg({ agentBudget: 100 });
+    const middleware = stigg.middleware({ stiggContext: { entitlement: credits } });
+
+    await assert.rejects(
+      middleware.startModel('m1', { stiggContexts: [{ customerId: CUSTOMER, idempotencyKey: 'run-1' }] }, 'h.model'),
+      /cannot set `idempotencyKey`/,
+    );
+  });
+
+  it("refuse a 0.5 harness's StepAttribution.customerId by name, rather than say no customer was named", async () => {
+    const { stigg } = await newStigg({ agentBudget: 100 });
+    const middleware = stigg.middleware({ stiggContext: { entitlement: credits } });
+
+    await assert.rejects(
+      middleware.startModel('m1', { customerId: CUSTOMER } as never, 'h.model'),
+      /stiggContexts: \[\{ customerId \}\].*removed in 0\.6/,
+    );
+  });
+
+  it('are refused a field of the wrong type, with the field named - not a TypeError later', async () => {
+    const { stigg } = await newStigg({ agentBudget: 100 });
+    const middleware = stigg.middleware({ stiggContext: { entitlement: credits } });
+
+    for (const [field, value] of [
+      ['agentId', 42],
+      ['attributionKey', {}],
+      ['usageMapper', 'per-token'],
+      ['correlationId', 7],
+      ['dimensions', ['model']],
+      ['dimensions', null],
+    ] as const) {
+      await assert.rejects(
+        middleware.startModel('m1', { stiggContexts: [{ customerId: CUSTOMER, [field]: value } as never] }, 'h.model'),
+        new RegExp(`stiggContext.${field} must be`),
+      );
+    }
+  });
+
+  it('are refused a dimension value that is not a string - it would match no entity', async () => {
+    const { stigg } = await newStigg({ agentBudget: 100 });
+    const middleware = stigg.middleware({ stiggContext: { entitlement: credits } });
+
+    await assert.rejects(
+      middleware.startModel(
+        'm1',
+        { stiggContexts: [{ customerId: CUSTOMER, dimensions: { model: 5 } } as never] },
+        'h.model',
+      ),
+      /stiggContext\.dimensions\.model must be a string, not number/,
+    );
+  });
+
+  it('are refused for a key a stiggContext does not have, as wrap refuses one', async () => {
+    const { stigg } = await newStigg({ agentBudget: 100 });
+    const middleware = stigg.middleware({ stiggContext: { entitlement: credits } });
+
+    await assert.rejects(
+      middleware.startModel('m1', { stiggContexts: [{ customerId: CUSTOMER, custmerId: 'typo' } as never] }, 'h.model'),
+      /custmerId/,
+    );
+  });
+});
+
 describe('the tool calls a model issued', () => {
   it('names a tool that starts with only its call id, and bills it to the agent that called it', async () => {
     const { middleware, flushed } = await graph({ leadTools: { web_search: credits } });
@@ -115,7 +219,11 @@ describe('the tool calls a model issued', () => {
     await middleware.startModel('m1', lead, 'my-harness.model');
     await middleware.endModel('m1', { metrics: { credits: 1 } }, [{ id: 'call_1', name: 'web_search' }]);
     // A tools node of its own, attributed to no agent - as LangGraph's `ToolNode` is.
-    await middleware.startTool('t1', { callId: 'call_1' }, { agent: 'tools', customerId: CUSTOMER });
+    await middleware.startTool(
+      't1',
+      { callId: 'call_1' },
+      { agent: 'tools', stiggContexts: [{ customerId: CUSTOMER }] },
+    );
     await middleware.endTool('t1', 'found');
 
     const { checked, ingests } = await flushed();
@@ -143,7 +251,7 @@ describe('the tool calls a model issued', () => {
 
   it('bills a call replayed after it succeeded to the same agent, under the same key', async () => {
     const { middleware, flushed } = await graph({ leadTools: { web_search: credits } });
-    const toolsNode = { agent: 'tools', customerId: CUSTOMER };
+    const toolsNode = { agent: 'tools', stiggContexts: [{ customerId: CUSTOMER }] };
 
     await middleware.startModel('m1', lead, 'my-harness.model');
     await middleware.endModel('m1', { metrics: { credits: 1 } }, [{ id: 'call_1', name: 'web_search' }]);
