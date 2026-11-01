@@ -119,7 +119,10 @@ Both take the same `stiggContext`, merged the same way — only where it attache
 | Tools | not seen | `tools`, checked and metered per call |
 | A refusal | the call throws | the step throws, and the graph decides — a refused sub-agent reads to its lead as a failed tool call |
 
-The [LangChain and LangGraph guide](docs/langchain.md) has every configuration.
+The [LangChain and LangGraph guide](docs/langchain.md) has every configuration. A Google ADK graph
+takes the same options as one plugin on its Runner — `new StiggAdkPlugin(...)` from
+`@stigg/agent-sdk-js/adk` — plus a `stepContext` that names the customer, since ADK has no per-run
+metadata ([guide](docs/guide.md#google-adk-one-plugin-per-runner)).
 
 ## 🧭 How it works
 
@@ -153,6 +156,13 @@ closed, and conflating them is how an outage takes an application down.
 | <img src="https://raw.githubusercontent.com/stiggio/stigg-agent-sdk-ts/main/docs/logos/cloudflare.svg" width="18" alt=""> | Cloudflare Workers AI | <img src="https://raw.githubusercontent.com/stiggio/stigg-agent-sdk-ts/main/docs/logos/openrouter.svg" width="18" alt=""> | OpenRouter |
 | <img src="https://raw.githubusercontent.com/stiggio/stigg-agent-sdk-ts/main/docs/logos/databricks.svg" width="18" alt=""> | Databricks | | |
 
+**Orchestrators** — every agent in a graph checked and metered as itself, its tools included:
+
+| | Orchestrator | | Orchestrator |
+| --- | --- | --- | --- |
+| <img src="https://raw.githubusercontent.com/stiggio/stigg-agent-sdk-ts/main/docs/logos/langchain.svg" width="18" alt=""> | [LangChain](docs/langchain.md) | <img src="https://raw.githubusercontent.com/stiggio/stigg-agent-sdk-ts/main/docs/logos/langgraph.svg" width="18" alt=""> | [LangGraph](docs/langchain.md#a-hand-built-langgraph) |
+| <img src="https://raw.githubusercontent.com/stiggio/stigg-agent-sdk-ts/main/docs/logos/google-adk.png" width="18" alt=""> | [Google ADK](docs/guide.md#google-adk-one-plugin-per-runner) | | Your own harness, through `stigg.middleware()` |
+
 Each binding is written against the *shape a vendor returns*, not against its SDK — so installing
 this package pulls in **no vendor packages at all**, and you install only the one you use.
 
@@ -170,6 +180,7 @@ rather than handing back a client that quietly meters nothing.
 | Start new customers on a plan | `stiggContext: { defaultPlanId }`, beside `customerId` |
 | Meter a gateway you operate | `client.stigg.headers()` out, `stigg.ingestFromHeaders(...)` back |
 | Govern a LangChain / LangGraph agent graph ([guide](docs/langchain.md)) | `new StiggLangChainCallbackHandler({ stigg, agents, tools })` from `@stigg/agent-sdk-js/langchain` |
+| Govern a Google ADK agent graph ([guide](docs/guide.md#google-adk-one-plugin-per-runner)) | `new StiggAdkPlugin({ stigg, agents, tools, stepContext })` from `@stigg/agent-sdk-js/adk`, in the Runner's `plugins` |
 | Govern a graph from your own harness | `stigg.middleware({ stiggContext, agents })` |
 
 One wrapped client serves every customer and every agent: the context is an argument, given once at

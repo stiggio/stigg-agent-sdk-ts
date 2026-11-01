@@ -17,6 +17,7 @@ import { describe, it } from 'node:test';
 import * as publicSurface from '../src';
 import * as internalSurface from '../src/internal';
 import * as langchainSurface from '../src/integrations/langchain';
+import * as adkSurface from '../src/integrations/adk';
 
 /** Everything a consumer may `import { … } from '@stigg/agent-sdk-js'`. */
 const PUBLIC = [
@@ -144,6 +145,16 @@ describe('the published surface', () => {
       'isAccessDenied',
     ]);
     assert.equal(langchainSurface.AccessDeniedError, publicSurface.AccessDeniedError);
+  });
+
+  it('exports exactly what the ADK entry point promises', () => {
+    assert.deepEqual(Object.keys(adkSurface).sort(), [
+      'AccessDeniedError',
+      'DENIED_ERROR_CODE',
+      'StiggAdkPlugin',
+      'isAccessDenied',
+    ]);
+    assert.equal(adkSurface.AccessDeniedError, publicSurface.AccessDeniedError);
   });
 
   it('keeps the two entry points disjoint', () => {

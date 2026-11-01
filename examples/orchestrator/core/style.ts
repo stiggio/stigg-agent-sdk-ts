@@ -16,6 +16,7 @@ export const SUBAGENT_DEPTH = LEAD_DEPTH + 4;
 /** One colour per agent; customer-level steps are grey. */
 export const AGENT_STYLES: Record<string, Extract<Style, string>> = {
   lead: 'cyan',
+  coordinator: 'cyan',
   researcher: 'magenta',
   writer: 'yellow',
   generalist: 'green',
@@ -25,7 +26,9 @@ export const AGENT_STYLES: Record<string, Extract<Style, string>> = {
 export const tag = (agent: string | undefined): string =>
   paint([AGENT_STYLES[agent ?? ''] ?? 'gray', 'bold'], `[${agent ?? 'customer'}]`);
 
-const depthOf = (agent: string | undefined) => (agent === 'lead' || !agent ? LEAD_DEPTH : SUBAGENT_DEPTH);
+/** The agents a turn starts with: the LangChain examples' lead, the ADK example's coordinator. */
+const TOP_AGENTS = new Set(['lead', 'coordinator']);
+const depthOf = (agent: string | undefined) => (!agent || TOP_AGENTS.has(agent) ? LEAD_DEPTH : SUBAGENT_DEPTH);
 
 /** A line under the trace of the agent it is about. */
 export const logAs = (agent: string | undefined, line: string): void =>

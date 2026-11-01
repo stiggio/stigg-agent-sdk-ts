@@ -120,6 +120,7 @@
         "example-orchestrator-langchain",
         "example-orchestrator-langgraph-handoff",
         "example-orchestrator-langgraph-model-fallback",
+        "example-orchestrator-adk-handoff",
         "example-setup",
         "example-two-agents"
       ],

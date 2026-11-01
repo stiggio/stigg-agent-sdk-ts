@@ -29,6 +29,8 @@ const ALLOWED: Record<string, string> = {
   // The one framework binding that needs its framework loaded, reached only through the
   // `@stigg/agent-sdk-js/langchain` entry - see the entry-point test below.
   '@langchain/core/callbacks/base': 'bindings/orchestrator/langchain/callback-handler.ts',
+  // Likewise ADK, reached only through `@stigg/agent-sdk-js/adk`.
+  '@google/adk': 'bindings/orchestrator/adk/plugin.ts',
 };
 
 const sources = (dir = ''): string[] =>
@@ -96,5 +98,10 @@ describe('what src/ is allowed to import', () => {
       'the main entry must not load the LangChain binding at runtime',
     );
     assert.ok(runtimeGraph('integrations/langchain.ts').has('bindings/orchestrator/langchain/callback-handler.ts'));
+  });
+
+  it('keeps ADK out of the main entry, so only `/adk` loads it', () => {
+    assert.ok(!runtimeGraph('index.ts').has('bindings/orchestrator/adk/plugin.ts'));
+    assert.ok(runtimeGraph('integrations/adk.ts').has('bindings/orchestrator/adk/plugin.ts'));
   });
 });

@@ -330,6 +330,55 @@ describe('an account without governance', () => {
     );
   });
 
+  for (const [asked, budget] of [
+    ['a budget', { entitlement: context.entitlement, limit: 5, cadence: 'P1M' }],
+    ['a parent', { entitlement: context.entitlement, parentId: 'team-1' }],
+  ] as const) {
+    it(`refuses ${asked} before provisioning the customer it would have gone to`, async () => {
+      const { stigg, mock } = await newStigg({ governance: false });
+      await assert.rejects(
+        () =>
+          stigg.register({
+            entityTypeId: 'agent',
+            customerId: 'cust-new',
+            agentId: 'agent-1',
+            defaultPlanId: 'plan-free',
+            budget,
+          }),
+        (err) => {
+          assert.ok(isGovernanceNotEnabled(err));
+          assert.match((err as Error).message, /a budget or a parent: .*nowhere to write the assignment/);
+          return true;
+        },
+      );
+      assert.deepEqual(mock.state.provisionAttempts, []);
+      assert.deepEqual(mock.state.subscriptionWrites, []);
+      assert.deepEqual(mock.state.entityWrites, []);
+    });
+  }
+
+  it('still provisions the customer for a bare register, and warns that the agent has no entity', async () => {
+    const warnings: string[] = [];
+    const { stigg, mock } = await newStigg({
+      governance: false,
+      logger: { ...noopLogger, warn: (line: string) => warnings.push(line) },
+    });
+
+    assert.equal(
+      await stigg.register({
+        entityTypeId: 'agent',
+        customerId: 'cust-new',
+        agentId: 'agent-1',
+        defaultPlanId: 'plan-free',
+      }),
+      'agent-1',
+    );
+
+    assert.deepEqual(mock.state.provisionAttempts, ['cust-new']);
+    assert.deepEqual(mock.state.entityWrites, []);
+    assert.equal(warnings.filter((line) => /has no entity/.test(line)).length, 1);
+  });
+
   it('still registers an agent that asked for no budget - the run needs no entity', async () => {
     const { stigg, mock } = await newStigg({ governance: false });
     const run = await runOn(stigg, { ...context, dimensions: { agentId: 'agent-1' } });

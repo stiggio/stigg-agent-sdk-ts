@@ -206,7 +206,9 @@ await client.messages.create({ model, max_tokens: 1024, messages, stiggContext: 
   first call.
 - **`register()` provisions too, when given `defaultPlanId`.** An entity needs its customer to
   exist, so `register({ customerId, defaultPlanId, ... })` provisions the customer first - once per
-  customer per process, shared with the checks. Without it, a new customer must exist already.
+  customer per process, shared with the checks. Without it, a new customer must exist already. On
+  an account without governance, a `register` with a budget or a parent is refused before anything
+  is provisioned.
 
 **`wrap` returns a copy.** The object you built is never mutated and keeps working ungoverned,
 which is what makes the governed one safe to hand around. Wrapping an already-governed client
@@ -468,6 +470,7 @@ are recipes over the same wrapper. One you **operate** is the opposite binding a
 | Client — a gateway that states **no** price      | `wrap(client, { recipe: databricksRecipe() })`       | same wrapper; no `cost` metric at all, and the model that answered is attributed instead | Yes, same as any client                    |
 | Gateway you **operate** (`bindings/proxy`)       | `client.stigg.headers()` → `stigg.ingestFromHeaders(...)` | attribution travels as `x-stigg-*` headers; `vendor` names the shape it observed         | **No — ingest only**                       |
 | Orchestrator — LangChain / LangGraph (`bindings/orchestrator`) | `new StiggLangChainCallbackHandler({ stigg, stiggContext, agents })` from `@stigg/agent-sdk-js/langchain`, one per graph, on `invoke(input, { callbacks, metadata })` — over the neutral `stigg.middleware(...)` | a callback handler: each step checked and billed as the agent that took it; checks before its agent's model calls and gated tools, ingests after | Yes — throws `AccessDeniedError` inside the refused agent; the graph decides |
+| Orchestrator — Google ADK (`bindings/orchestrator`) | `new StiggAdkPlugin({ stigg, stiggContext, agents, stepContext })` from `@stigg/agent-sdk-js/adk`, in the Runner's `plugins` — over the same `stigg.middleware(...)` | a Runner plugin: each step checked and reported as the ADK agent that took it | Yes — a refused model call ends in an error event, a refused tool in a result the model reads; `stiggPlugin.denialOf(event)` |
 
 A client run that names no `entitlement` lands in the same column as the gateway — metering
 without a gate — except that it is in-process, and naming one turns it back on.
@@ -543,6 +546,82 @@ sends `metadata`, so set it in your auth handler, never from the request.
 
 Every configuration - metering only, one entitlement for the graph, an agent per budget, tools
 priced by use, and what to do with a refusal - is in the [LangChain and LangGraph guide](langchain.md).
+
+#### Google ADK: one plugin per Runner
+
+ADK runs a plugin's callbacks for every agent a Runner reaches, sub-agents included, so one plugin
+governs the whole graph. It lives on its own entry point, `@stigg/agent-sdk-js/adk`, so the main
+entry never loads `@google/adk` (an optional peer dependency):
+
+```ts
+import { InMemoryRunner } from '@google/adk';
+import { StiggAdkPlugin } from '@stigg/agent-sdk-js/adk';
+
+const stiggPlugin = new StiggAdkPlugin({
+  stigg,
+  stiggContext: { attributionKey: 'agentId', entitlement: { currencyId: 'credits' } }, // shared
+  agents: {
+    // by the `name` given to LlmAgent
+    coordinator: { stiggContext: { agentId: 'agent-coordinator' } },
+    researcher: { stiggContext: { agentId: 'agent-researcher' }, tools: { web_search: { currencyId: 'credits' } } },
+  },
+  // ADK has no per-run metadata, so the customer is resolved per step, on the server
+  stepContext: ({ adkContext }) => ({ customerId: customerOf(adkContext.userId) }),
+});
+// Stigg first: ADK stops at the first plugin that answers a step
+const runner = new InMemoryRunner({ agent: coordinator, appName, plugins: [stiggPlugin, ...otherPlugins] });
+
+for await (const event of runner.runAsync({ userId, sessionId, newMessage })) {
+  const decision = stiggPlugin.denialOf(event);
+  if (decision) console.log('refused:', decision.message);
+}
+```
+
+**Who a step is for.** The agent is `callbackContext.agentName`. It comes from the agent tree you
+built, not from the request, so a client cannot change it. The customer comes from `stepContext`,
+which is called for every step with its agent, ADK's context, and the model or tool about to run.
+What it returns is applied over the plugin's and the agent's context, as a LangChain run's
+`metadata.stiggContext` is; a tool's price from `tools` still applies over it. Return the model as
+a dimension, with its price, to give an agent a budget per model.
+
+Resolve the customer from what your server knows. ADK's own API server lets the client choose
+`userId` and send a `stateDelta` with every run, so `adkContext.userId` is only safe when your
+server sets it from the login, and session state never is. If the plugin has a default
+`stiggContext.customerId`, a step whose `stepContext` returns nothing is charged to that default.
+
+**Refusals.** ADK turns a plugin's throw into an `UNKNOWN_ERROR` event, so the plugin answers a
+refused step instead of throwing:
+
+- A refused tool never runs. Its result is a short error the model reads and works around -
+  `web_search is not available: BudgetExceeded.` - without who refused it or what is left.
+- A refused model call never reaches the model. It answers with what `onRefusal` decides - the
+  graph's call, as a LangGraph edge is:
+
+  ```ts
+  // a refused researcher hands its turn to the generalist, which answers without search
+  onRefusal: ({ agent }) => (agent === 'researcher' ? { transferTo: 'generalist' } : undefined),
+  ```
+
+  `{ transferTo }` must name an agent ADK lets the refused one transfer to; any other name is a
+  configuration error, thrown. An agent hands off at most once per run, so two refused agents
+  cannot pass the turn back and forth. Any other `LlmResponse` is answered as it is. Returning
+  nothing ends the agent's turn in an error response, `errorCode: 'STIGG_ACCESS_DENIED'`.
+
+`stiggPlugin.denialOf(event)` returns the decision behind either. A refused model call's decision is
+in its event's `customMetadata`, which the model never sees; a refused tool's stays in the plugin.
+
+**Usage.** A model call is reported when its last response arrives (the one with a finish reason),
+before ADK hands that event to you - so a caller that stops reading or aborts after the answer
+still has it reported. A streamed call is reported once, by its final running total. A call with no
+finish reason is reported at the agent's next step, when the agent finishes, or when the run does.
+A failed model call or tool reports nothing.
+
+**Not governed.** ADK's control tools - `transfer_to_agent`, `exit_loop`, `set_model_response`,
+`finish_task` - are never checked, not even by `'*'`: they do no work, and refusing one would break
+the agent. Gemini's built-in tools (`GOOGLE_SEARCH` and the like) run inside the model call, so they
+are counted in the call's tokens. An agent wrapped in an `AgentTool` runs in a Runner of its own,
+without this plugin, so its model calls are not governed (the plugin warns once); add it as a
+sub-agent instead.
 
 #### Observability: an orchestrator's checks and ingests are OpenTelemetry spans
 
@@ -1329,6 +1408,7 @@ Stigg account.
 | `example-orchestrator-langchain` | [`orchestrator/langchain.ts`](../examples/orchestrator/langchain.ts) | A multi-agent orchestrator chat: a lead LangChain agent delegating to a researcher and a writer held as tools, governed by one `StiggLangChainCallbackHandler`, each agent as itself. The researcher searches until Stigg refuses it, then the lead takes another pass with a generalist answering from general knowledge. Every agent is registered under one parent agent, `agent-orchestrator`, whose budget caps the graph |
 | `example-orchestrator-langgraph-handoff` | [`orchestrator/langgraph-handoff.ts`](../examples/orchestrator/langgraph-handoff.ts) | Agents handing work to each other: the same chat as a hand-built LangGraph `StateGraph`, one node per agent. The Stigg integration is the LangChain example's word for word; a refused researcher is routed to the generalist by a graph edge |
 | `example-orchestrator-langgraph-model-fallback` | [`orchestrator/langgraph-model-fallback.ts`](../examples/orchestrator/langgraph-model-fallback.ts) | One agent in one node, with a budget per model: Opus's small and dear, Haiku's large and cheap, each scoped to its model, and every call reported with its model as a dimension. When Stigg refuses Opus, the node answers with Haiku in the same turn; the next turn tries Opus first again |
+| `example-orchestrator-adk-handoff` | [`orchestrator/adk-handoff.ts`](../examples/orchestrator/adk-handoff.ts) | A Google ADK chat: a coordinator hands each request to a researcher (a paid `web_search`), which hands it to a writer, governed by one `StiggAdkPlugin` on the Runner, each agent as itself, all under one parent agent. On the fourth request the researcher runs dry: its search comes back refused as the tool's result, then `onRefusal` hands its refused model call to a generalist, which answers without search and passes the turn to the writer |
 | `example-gateway-openrouter`| [`gateway/openrouter.ts`](../examples/gateway/openrouter.ts)           | The two gateway topologies: calling one gates, operating one only ingests. `example-gateway` runs this one  |
 | `example-gateway-litellm`   | [`gateway/litellm.ts`](../examples/gateway/litellm.ts)                 | The same two topologies when the cost is in a header: real spend, then tokens, from one request             |
 | `example-gateway-bedrock`   | [`gateway/bedrock.ts`](../examples/gateway/bedrock.ts)                 | A gateway that states no price: tokens are all there is to meter, and nothing proxies it                    |
@@ -1516,7 +1596,7 @@ them first.
 
 | Symptom                                     | Cause and fix                                                                                                                                                                                                                                                                                                                                        |
 | ------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `403 GovernanceNotEnabled`                  | The account has no governance. Checks and usage still work; `register()` throws, because there is nowhere to create the agent entity. Contact Stigg to enable it.                                                                                                                                                                                    |
+| `403 GovernanceNotEnabled`                  | The account has no governance. Checks and usage still work. `register()` with a budget or a parent throws, because there is nowhere to write them; without either, it warns and returns, and the agent is governed at the customer level. Contact Stigg to enable it.                                                                                                                                                                                    |
 | `No STIGG_SERVER_API_KEY`                          | Set it to a server key for the environment in `STIGG_BASE_URL`, or leave it blank to run on the built-in mock.                                                                                                                                                                                                                                       |
 | `503` and every turn denied                 | The governance cache is unavailable and `checkErrorAction` is `deny`. The default is `allow`, so this is a policy that was asked for; drop it to keep running through the outage, or relax a single call with `stiggContext: { checkErrorAction: 'allow' }`. |
 | `usage value must be a whole number to report against a feature` | `POST /api/v1/usage` takes integers. Report against a **credit currency** instead, which takes fractions, or raise the unit size in your `usageMapper` so the division comes out whole.                                                                                                                                                 |

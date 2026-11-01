@@ -4,7 +4,7 @@ What each one *demonstrates*, and how to run it, is [section 6 of the package
 README](../docs/guide.md#6-run-the-examples). This file answers the question that one does not:
 standing in this folder, which of these files is a thing you run?
 
-Twenty are. Everything else is imported by them.
+Twenty-one are. Everything else is imported by them.
 
 ## Runnable
 
@@ -24,6 +24,7 @@ Twenty are. Everything else is imported by them.
 | `orchestrator/langchain.ts` | `example-orchestrator-langchain` — a multi-agent orchestrator chat — a lead LangChain `createAgent` that delegates to a researcher (with a tool loop) and a writer held as tools — governed by one `StiggLangChainCallbackHandler`, each agent as itself; once Stigg refuses the researcher, the lead takes another pass with a generalist answering without search; with a live trace, a guard rail of five calls per tool per run, and optional Langfuse tracing beside Stigg |
 | `orchestrator/langgraph-handoff.ts` | `example-orchestrator-langgraph-handoff` — agents handing work to each other: the same chat as a hand-built LangGraph `StateGraph`, one node per agent: the same `StiggLangChainCallbackHandler`, `agents` keyed by node name, and a refused researcher routed to the generalist by a graph edge |
 | `orchestrator/langgraph-model-fallback.ts` | `example-orchestrator-langgraph-model-fallback` — one LangGraph agent in one node with a budget per model, each scoped to its model by a `model` dimension: it answers with an expensive Anthropic model until that model's budget runs out, then with a cheaper one in the same turn |
+| `orchestrator/adk-handoff.ts` | `example-orchestrator-adk-handoff` — a Google ADK chat: a coordinator hands each request to a researcher (a paid `web_search`), which hands it to a writer, governed by one `StiggAdkPlugin` on the Runner, each agent as itself; once the researcher runs dry, `onRefusal` hands its turn to a generalist answering without search, and the writer still answers |
 | `gateway/openrouter.ts` | `example-gateway-openrouter` (and `example-gateway`) — the same gateway through `@openrouter/sdk` |
 | `gateway/litellm.ts` | `example-gateway-litellm` |
 | `gateway/bedrock.ts` | `example-gateway-bedrock` — the gateway that states no price, so it meters tokens |

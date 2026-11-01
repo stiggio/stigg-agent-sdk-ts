@@ -372,20 +372,21 @@ export class StiggAgentSDK {
     // built: `run()` already validates in this order, and a malformed call that reports itself as
     // a probe timeout sends the reader looking at the network for a typo they can see.
     await this.ensureStarted();
+    // Only a call that asked for something governance-only is an error. A budget or a parent
+    // cannot be honoured, and carrying on would leave an agent that looks governed with a budget
+    // that was never written - so that fails, before a customer is provisioned for nothing.
+    if (placement && !this.engine.capabilities.provisioning) {
+      throw new GovernanceNotEnabledError(
+        `Cannot give agent ${agentId} a budget or a parent: governance is not enabled for this ` +
+          'account, so there is nowhere to write the assignment. Contact Stigg to enable it, or ' +
+          'register without them - checks and usage reporting work at the customer level.',
+      );
+    }
     // The customer before the agent: an entity is created under a customer, so one Stigg has never
     // seen would be refused. The same once-per-customer provisioning every check does.
     if (defaultPlanId) await this.provisionCustomer(customerId, defaultPlanId);
     if (!this.engine.capabilities.provisioning) {
-      // Only a call that asked for something governance-only is an error. A budget or a parent
-      // cannot be honoured, and carrying on would leave an agent that looks governed with a
-      // budget that was never written - so that fails. A bare registration asked for neither.
-      if (placement) {
-        throw new GovernanceNotEnabledError(
-          `Cannot give agent ${agentId} a budget or a parent: governance is not enabled for this ` +
-            'account, so there is nowhere to write the assignment. Contact Stigg to enable it, or ' +
-            'register without them - checks and usage reporting work at the customer level.',
-        );
-      }
+      // A bare registration asked for nothing governance-only.
       this.config.logger.warn(
         `[stigg] governance is not enabled: agent ${agentId} has no entity, so checks and usage ` +
           'apply to the customer rather than to the agent.',
