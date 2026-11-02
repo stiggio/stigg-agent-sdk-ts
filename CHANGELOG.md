@@ -11,9 +11,9 @@ versions below track what this repository holds rather than what npm publishes.
 
 - Orchestrator governance for LangChain and LangGraph: `StiggLangChainCallbackHandler` from the new
   `@stigg/agent-sdk-js/langchain` entry, over the framework-neutral `stigg.middleware(...)`. One
-  handler per graph checks and bills each step as the agent that took it, governs tools by name
-  (`'*'` for the rest, `false` to exempt one, a `usage` mapper to price by use), and throws
-  `AccessDeniedError` inside the refused agent so the graph decides what a refusal means.
+  handler per graph checks each step and reports its usage as the agent that took it, governs
+  tools by name (`'*'` for the rest, `false` to exempt one, a `usage` mapper to price by use), and
+  throws `AccessDeniedError` inside the refused agent so the graph decides what a refusal means.
 - `docs/langchain.md`, a guide to every LangChain and LangGraph configuration, and two runnable
   examples of the same governed chat: `yarn example-orchestrator-langchain` and
   `yarn example-orchestrator-langgraph`.
