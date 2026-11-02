@@ -14,7 +14,7 @@ const PACKAGE_ROOT = join(__dirname, '..');
 
 describe('the multi-agent orchestrator example', () => {
   it('governs each agent on its own, and keeps going when one is refused', async () => {
-    const pending = run('yarn', ['tsx', 'examples/orchestrator/langchain.ts'], {
+    const pending = run('yarn', ['tsx', 'examples/orchestrator/langchain/langchain-handoff.ts'], {
       cwd: PACKAGE_ROOT,
       // Forced, so the test never depends on whatever keys happen to be in the developer's .env.
       env: { ...process.env, ...EXAMPLE_ENV },
@@ -60,7 +60,7 @@ describe('the multi-agent orchestrator example', () => {
 
   /** One offline turn of the example, with the demo fixtures overridden. */
   const oneTurn = async (env: Record<string, string>) => {
-    const pending = run('yarn', ['tsx', 'examples/orchestrator/langchain.ts'], {
+    const pending = run('yarn', ['tsx', 'examples/orchestrator/langchain/langchain-handoff.ts'], {
       cwd: PACKAGE_ROOT,
       env: { ...process.env, ...EXAMPLE_ENV, ...env },
       timeout: 120_000,

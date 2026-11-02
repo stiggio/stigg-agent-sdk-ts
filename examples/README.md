@@ -4,7 +4,7 @@ What each one *demonstrates*, and how to run it, is [section 6 of the package
 README](../docs/guide.md#6-run-the-examples). This file answers the question that one does not:
 standing in this folder, which of these files is a thing you run?
 
-Twenty-one are. Everything else is imported by them.
+Twenty-two are. Everything else is imported by them.
 
 ## Runnable
 
@@ -21,10 +21,11 @@ Twenty-one are. Everything else is imported by them.
 | `client/databricks.ts` | `example-client-databricks` — the OpenAI SDK pointed at a workspace `/serving-endpoints`. `AGENT_SDK_DATABRICKS_EXTERNAL=1` asserts the external-model route |
 | `client/typesafe.ts` | `example-client-typesafe` — **needs a real TypeSafe key**, see below |
 | `client/two-agents.ts` | `example-two-agents` — scripted, so it ends by itself |
-| `orchestrator/langchain.ts` | `example-orchestrator-langchain` — a multi-agent orchestrator chat — a lead LangChain `createAgent` that delegates to a researcher (with a tool loop) and a writer held as tools — governed by one `StiggLangChainCallbackHandler`, each agent as itself; once Stigg refuses the researcher, the lead takes another pass with a generalist answering without search; with a live trace, a guard rail of five calls per tool per run, and optional Langfuse tracing beside Stigg |
-| `orchestrator/langgraph-handoff.ts` | `example-orchestrator-langgraph-handoff` — agents handing work to each other: the same chat as a hand-built LangGraph `StateGraph`, one node per agent: the same `StiggLangChainCallbackHandler`, `agents` keyed by node name, and a refused researcher routed to the generalist by a graph edge |
-| `orchestrator/langgraph-model-fallback.ts` | `example-orchestrator-langgraph-model-fallback` — one LangGraph agent in one node with a budget per model, each scoped to its model by a `model` dimension: it answers with an expensive Anthropic model until that model's budget runs out, then with a cheaper one in the same turn |
-| `orchestrator/adk-handoff.ts` | `example-orchestrator-adk-handoff` — a Google ADK chat: a coordinator hands each request to a researcher (a paid `web_search`), which hands it to a writer, governed by one `StiggAdkPlugin` on the Runner, each agent as itself; once the researcher runs dry, `onRefusal` hands its turn to a generalist answering without search, and the writer still answers |
+| `orchestrator/langchain/langchain-handoff.ts` | `example-orchestrator-langchain` — a multi-agent orchestrator chat — a lead LangChain `createAgent` that delegates to a researcher (with a tool loop) and a writer held as tools — governed by one `StiggLangChainCallbackHandler`, each agent as itself; once Stigg refuses the researcher, the lead takes another pass with a generalist answering without search; with a live trace, a guard rail of five calls per tool per run, and optional Langfuse tracing beside Stigg |
+| `orchestrator/langchain/langgraph-handoff.ts` | `example-orchestrator-langgraph-handoff` — agents handing work to each other: the same chat as a hand-built LangGraph `StateGraph`, one node per agent: the same `StiggLangChainCallbackHandler`, `agents` keyed by node name, and a refused researcher routed to the generalist by a graph edge |
+| `orchestrator/langchain/langgraph-model-fallback.ts` | `example-orchestrator-langgraph-model-fallback` — one LangGraph agent in one node with a budget per model, each scoped to its model by a `model` dimension: it answers with an expensive Anthropic model until that model's budget runs out, then with a cheaper one in the same turn |
+| `orchestrator/adk/adk-handoff.ts` | `example-orchestrator-adk-handoff` — a Google ADK chat: a coordinator hands each request to a researcher (a paid `web_search`), which hands it to a writer, governed by one `StiggAdkPlugin` on the Runner, each agent as itself; once the researcher runs dry, `onRefusal` hands its turn to a generalist answering without search, and the writer still answers |
+| `orchestrator/adk/adk-model-fallback.ts` | `example-orchestrator-adk-model-fallback` — a Google ADK assistant on an expensive Gemini model, and its twin on a cheaper one, each an agent with its own budget under one `StiggAdkPlugin`; once the assistant runs dry, `onRefusal` hands each request to the twin |
 | `gateway/openrouter.ts` | `example-gateway-openrouter` (and `example-gateway`) — the same gateway through `@openrouter/sdk` |
 | `gateway/litellm.ts` | `example-gateway-litellm` |
 | `gateway/bedrock.ts` | `example-gateway-bedrock` — the gateway that states no price, so it meters tokens |
@@ -39,12 +40,12 @@ built-in vendor mock speaks the chat wire formats, and TypeSafe's System One is 
 Stigg still falls back to its own mock there, so only the vendor key is required.
 
 The nine chat examples — `anthropic`, `openai`, `gemini`, `groq`, `mistral`, `ollama`,
-`openrouter`, `litellm` and `databricks` — share one REPL and stay open until you end them, as does
-`orchestrator/langchain`, which is a chat with a lead agent rather than with a model. The
+`openrouter`, `litellm` and `databricks` — share one REPL and stay open until you end them, as do
+the orchestrator examples, which are chats with a graph of agents rather than with a model. The
 rest run a fixed script and exit: `typesafe`, which asks a whole set of typed questions in one call
 rather than holding a conversation, `two-agents`, `cloudflare`, and the gateway examples. The
 test suite runs three of those — the OpenRouter and LiteLLM gateways, and `two-agents` — and
-the orchestrator chat as well, with its input piped in.
+every orchestrator example as well, with its input piped in.
 
 ## Imported, not runnable
 
@@ -57,14 +58,21 @@ gateway/core/    gateway.ts       both gateway topologies, shared by the two hel
                  vendor.ts        where a gateway writes down what it charged, and how it is called
                  proxy.ts         a real HTTP proxy on a loopback socket
 
-orchestrator/    chat.ts          the governed chat every orchestrator example shares - each passes
-core/                             its own agents and budgets: setup, the one Stigg handler, Langfuse,
-                                  the REPL
+orchestrator/    chat.ts          the governed chat every orchestrator example shares: setup,
+core/                             registering the agents, the Stigg options, the REPL - no framework
+                 scenarios.ts     the scenarios as data - handoff, model fallback: agents, budgets,
+                                  the paid tool, who takes over on a refusal
                  style.ts         terminal colours, agent tags and indentation
+
+orchestrator/    kit.ts           LangChain and LangGraph: the model, the search, the callback
+langchain/                        handler that carries the Stigg options, Langfuse
+
+orchestrator/    kit.ts           Google ADK: the model, the Runner, reading ADK events into the trace
+adk/
 ```
 
-Each `core/` directory holds the part that is not vendor-specific, and the files beside it hold
-the part that is. That split is the point rather than an accident of refactoring: governance
+Each `core/` directory holds the part that is not vendor-specific, and the files or folders
+beside it hold the part that is. That split is the point rather than an accident of refactoring: governance
 wiring written once is governance wiring that cannot drift between vendors.
 
 ## Scaffolding

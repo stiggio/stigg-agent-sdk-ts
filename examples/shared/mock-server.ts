@@ -242,7 +242,7 @@ function geminiUsage(body: any, text: unknown) {
  * addition for a parameter that is an enum, which is how ADK declares `transfer_to_agent`: such a
  * function is called once per value, each value at most once a turn, and only after the plain ones -
  * so an agent uses its own tools before it hands the turn on, hands off to each agent it can reach
- * once, and a chain of handoffs ends.
+ * once, and a chain of handoffs ends. A request with function calling set to `NONE` calls nothing.
  *
  * A turn starts at the latest message the user typed. A function's result is a `user` message too,
  * and so is ADK's account of what the other agents did (`For context: ...`) - both are the turn
@@ -254,7 +254,8 @@ function nextGeminiCall(body: any): { name: string; args: Record<string, unknown
   const handsOff = (declaration: any) =>
     Object.values(propertiesOf(declaration)).some((schema: any) => Array.isArray(schema?.enum));
   const offered: any[] = (body.tools ?? []).flatMap((tool: any) => tool.functionDeclarations ?? []);
-  if (!offered.length) return undefined;
+  // Function calling turned off, as Gemini honours it: the functions are declared, never called.
+  if (!offered.length || body.toolConfig?.functionCallingConfig?.mode === 'NONE') return undefined;
   const declarations = [...offered.filter((d) => !handsOff(d)), ...offered.filter(handsOff)];
   const contents: any[] = body.contents ?? [];
   const continues = (content: any) =>

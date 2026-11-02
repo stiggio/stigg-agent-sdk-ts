@@ -1,52 +1,29 @@
 /**
- * The governed multi-agent chat both orchestrator examples share - everything but the graph.
+ * The governed multi-agent chat every orchestrator example shares - everything but the orchestrator.
  *
- * Setup, registering the agents under one parent, the one Stigg callback handler, Langfuse, the
- * chat loop and the output are the same whether the graph is LangChain's `createAgent` or a
- * hand-built LangGraph `StateGraph`; so is the Stigg integration, which is the point. Each example
- * builds its graph from the kit `runOrchestratorChat` hands it.
+ * Setup, registering the agents under one parent, the Stigg options for the graph, the chat loop
+ * and the output are the same whether the graph is LangChain's, LangGraph's or Google ADK's; so is
+ * the Stigg integration, which is the point. Only how those options attach differs - a LangChain
+ * callback handler, an ADK Runner plugin - and each orchestrator brings its own, in `start`.
  */
 import '../../shared/load-env';
 import { createInterface } from 'node:readline';
-import { randomUUID } from 'node:crypto';
-import { ChatAnthropic } from '@langchain/anthropic';
-import { CallbackHandler as LangfuseCallbackHandler } from '@langfuse/langchain';
-import { LangfuseSpanProcessor, isDefaultExportSpan } from '@langfuse/otel';
-import { propagateAttributes, startActiveObservation } from '@langfuse/tracing';
-import { NodeTracerProvider } from '@opentelemetry/sdk-trace-node';
-import type { BaseCallbackHandler } from '@langchain/core/callbacks/base';
-import { AIMessage, HumanMessage, ToolMessage, type BaseMessage } from '@langchain/core/messages';
-import { TavilySearch } from '@langchain/tavily';
-import type { RunnableConfig } from '@langchain/core/runnables';
-import { tool } from 'langchain';
-import { z } from 'zod';
 import {
-  STIGG_TRACER_NAME,
   StiggAgentSDK,
   entitlementId,
   unitsPerTokens,
-  type AccessDecision,
   type Entitlement,
   type MetricsMapper,
   type Metrics,
-  type StiggContext,
+  type MiddlewareOptions,
 } from '../../../src';
-import { StiggLangChainCallbackHandler } from '../../../src/integrations/langchain';
 import { maybeStartMockServer } from '../../shared/mock-server';
 import { maybeStartMockStiggServer } from '../../shared/mock-stigg-server';
-import { MODEL_DIMENSION, MODEL_ENTITY_TYPE, prepareDemo } from '../../shared/setup-governance';
+import { MODEL_ENTITY_TYPE, modelRefId, prepareDemo } from '../../shared/setup-governance';
 import { describeSetup, resolveDemoEnv } from '../../shared/demo-env';
 import { requireKey, resolveStiggEnv } from '../../shared/stigg-env';
-import { optionalEnv } from '../../client/core/vendor';
-import { AGENT_STYLES, logAs, logBlocked, logRefused, paint } from './style';
+import { AGENT_STYLES, logAs, paint } from './style';
 
-export const MODEL = process.env.AGENT_SDK_ANTHROPIC_MODEL ?? 'claude-opus-5';
-/** LangGraph's default of 25 counts steps, and every middleware hook is one - too few for these graphs. */
-export const RECURSION_LIMIT = 150;
-/** Uncapped, one "research" reply runs to thousands of tokens and a minute and a half. */
-const MAX_OUTPUT_TOKENS = 1_500;
-/** The guard rail: calls of any one tool per agent per run. */
-export const MAX_CALLS_PER_TOOL = 5;
 const EXIT_WORDS = new Set(['exit', 'quit', '']);
 
 /** A budget, and - when it is not the default of a credit per thousand tokens - what a credit buys. */
@@ -69,222 +46,64 @@ export type ChatCast = {
    * sum. Each example's own, so one example's run never rewrites another's cap or shares its count.
    */
   parent: string;
+  /** What each agent's id starts with, so two examples' agents of one name are not one entity. */
+  agentIdPrefix?: string;
 };
 
-/**
- * The handoff chat's agents. Per-entity usage is whole units, so each call is at least a credit;
- * the researcher runs dry in turn four offline.
- */
-export const HANDOFF_CAST: ChatCast = {
-  agents: {
-    lead: { budget: 100 },
-    researcher: { budget: 10 },
-    writer: { budget: 20 },
-    generalist: { budget: 20 },
-  },
-  searcher: 'researcher',
-  description: 'Chatting with a lead agent and its subagents',
-  parent: 'agent-orchestrator',
+export type DemoEnv = ReturnType<typeof resolveDemoEnv>;
+
+/** What an orchestrator gets to start its graph with. */
+export type ChatKit = {
+  stigg: StiggAgentSDK;
+  demoEnv: DemoEnv;
+  /** The offline model mock, running when there is no vendor key. */
+  mock: { baseUrl: string } | undefined;
+  /**
+   * The options every binding takes - the shared context once, each agent's own by its name, the
+   * searcher's `search` priced per result, and hooks that print every check and report. Hand them
+   * to the orchestrator's own binding.
+   */
+  governance(search?: string): MiddlewareOptions;
 };
 
-/** An agent's last reply. `.text`, because a thinking model replies in blocks. */
-export const lastText = (messages: BaseMessage[]): string => messages.at(-1)?.text ?? '';
+/** A started graph, as the chat drives it. */
+export type ChatSession = {
+  /** One request in, the answer out. */
+  turn(request: string): Promise<string>;
+  /** Lines the banner adds after the chat's description. */
+  notes?: string[];
+  /** Flushes whatever the orchestrator keeps open, once the chat is over. */
+  close?(): Promise<void>;
+};
 
-/** This run's messages: everything after the last user message. */
-export function thisRun(messages: BaseMessage[]): BaseMessage[] {
-  let start = messages.length;
-  while (start > 0 && !HumanMessage.isInstance(messages[start - 1])) start -= 1;
-  return messages.slice(start);
-}
-
-/** Logs a model call's start and end, so a long answer does not read as a hang. */
-export async function timedModelCall(
-  agent: string,
-  call: number,
-  run: () => Promise<AIMessage>,
-  model = MODEL,
-): Promise<AIMessage> {
-  const at = Date.now();
-  logAs(agent, paint('dim', `model call #${call} - waiting for ${model}…`));
-  const reply = await run();
-  const usage = reply.usage_metadata;
-  logAs(
-    agent,
-    paint(
-      'dim',
-      `model call #${call} - ${usage?.input_tokens ?? 0} in / ${usage?.output_tokens ?? 0} out tokens, ${Date.now() - at}ms`,
-    ),
-  );
-  return reply;
-}
-
-/** The line a fallback announces itself with, and the note its answer carries. */
-export function anotherPass(agent: string, decision: AccessDecision, fallback: string): string {
-  logAs(
-    'lead',
-    `  ${paint(['yellow', 'bold'], 'another pass')} - ` +
-      paint('yellow', `${agent} refused (${decision.reason ?? 'denied'} by ${decision.deniedBy ?? 'policy'}), `) +
-      `${paint('yellow', 'asking the')} ${paint([AGENT_STYLES[fallback] ?? 'gray', 'bold'], fallback)} ` +
-      paint('yellow', 'instead, without search'),
-  );
-  return `(From general knowledge - the ${agent} was refused by Stigg, so nothing here is sourced.) `;
-}
-
-/** A tool call, as a model issued it. */
-type ToolCall = { name: string; id?: string };
-
-const failedTool = (call: ToolCall, content: string) =>
-  new ToolMessage({ content, tool_call_id: call.id ?? '', name: call.name, status: 'error' });
-
-/** A tool Stigg refused, handed back to the model as the tool's result, so the agent carries on. */
-export function refusedTool(agent: string, call: ToolCall, decision: AccessDecision): ToolMessage {
-  logRefused(agent, call.name, decision);
-  return failedTool(call, `${call.name} was refused: ${decision.message}`);
-}
-
-/** A tool call past the guard rail, answered without running. */
-export function blockedTool(agent: string, call: ToolCall): ToolMessage {
-  logBlocked(agent, call.name, `over ${MAX_CALLS_PER_TOOL} calls this run`);
-  return failedTool(call, `${call.name} was not run: over ${MAX_CALLS_PER_TOOL} calls this run.`);
-}
-
-/** A stand-in search when there is no Tavily key. Nothing leaves the process. */
-const webSearch = tool(
-  ({ query }) => `Top result for "${query}": per-agent token spend is the usual first metric to track.`,
-  {
-    name: 'web_search',
-    description: 'Search the web and return the top result.',
-    schema: z.object({ query: z.string() }),
-  },
-);
-
-export const PROMPTS = {
-  lead:
-    'You are the lead. You do not research or write yourself: delegate to the researcher, then ' +
-    'to the writer with what the researcher found, and return the writer’s answer. If the ' +
-    'findings say they come from general knowledge, tell the writer, so the answer says it is not sourced.',
-  leadBrief: 'You are the lead. Turn the request into a short research brief for the researcher.',
-  researcher: (search: string) =>
-    `You are the researcher. Use ${search}, then summarise what you found, citing sources.`,
-  writer: 'You are the writer. Turn the findings you are given into a short, clear answer.',
-  generalist:
-    'You are a generalist. You have no search: answer the brief from your own knowledge, briefly, ' +
-    'and say plainly that what you give is not sourced.',
+/** The orchestrator a chat runs. */
+export type Orchestrator = {
+  /** Its name, for the banner and the agents' display names. */
+  framework: string;
+  /** The model vendor's key. Without one, the vendor runs as the offline mock. */
+  apiKey: string | undefined;
+  start(kit: ChatKit): Promise<ChatSession> | ChatSession;
 };
 
 /**
  * A unit per `tokens` tokens. A credit currency takes the fraction; a feature's usage report takes
  * whole numbers only, so there each call rounds up rather than being rejected.
  */
-const perTokens = (entitlement: Entitlement, tokens: number): MetricsMapper => {
+export const perTokens = (entitlement: Entitlement, tokens: number): MetricsMapper => {
   const units = unitsPerTokens(entitlementId(entitlement), tokens);
   if (entitlement.currencyId) return units;
   return (measurement) =>
     Object.fromEntries(Object.entries(units(measurement)).map(([id, value]) => [id, Math.ceil(value)]));
 };
 
-/** How many results a search returned: Tavily lists them, the canned search returns one. */
+/** How many results a search returned: a list counts its results, anything else is one. */
 const resultsIn = (output: unknown): number => {
   const results = (output as { results?: unknown } | undefined)?.results;
   return Array.isArray(results) ? results.length : 1;
 };
 
-/** What a graph gets to build itself with. */
-export type OrchestratorKit = {
-  stigg: StiggAgentSDK;
-  /** The chat's model, `MODEL`. */
-  model: ChatAnthropic;
-  /** Another Anthropic model, set up the same way - live or against the offline mock. */
-  modelNamed(name: string): ChatAnthropic;
-  /**
-   * A call's config with that model's `stiggContext`: the model as a dimension, which its scoped
-   * budget is matched by, and the price the calling agent pays for it. The handler lays it over the
-   * run's own.
-   */
-  asModel(agent: string, model: string, config: RunnableConfig): RunnableConfig;
-  search: typeof webSearch | TavilySearch;
-};
-
-/** A graph, as the chat drives it: one turn in, the conversation so far out. */
-export type OrchestratorGraph = {
-  turn(
-    history: BaseMessage[],
-    request: string,
-    config: { recursionLimit: number; callbacks: BaseCallbackHandler[]; metadata: Record<string, unknown> },
-  ): Promise<{ messages: BaseMessage[] }>;
-};
-
-/**
- * Optional Langfuse tracing beside Stigg. Both trace through OpenTelemetry, so one provider carries
- * both; Langfuse's filter is widened to keep Stigg's `stigg.check` / `stigg.ingest` spans. Off
- * without both keys, and when forced offline, so tests never send traces.
- */
-type Langfuse = NonNullable<ReturnType<typeof startLangfuse>>;
-
-function startLangfuse() {
-  const publicKey = optionalEnv('AGENT_SDK_LANGFUSE_PUBLIC_KEY', 'LANGFUSE_PUBLIC_KEY');
-  const secretKey = optionalEnv('AGENT_SDK_LANGFUSE_SECRET_KEY', 'LANGFUSE_SECRET_KEY');
-  const baseUrl = optionalEnv('AGENT_SDK_LANGFUSE_BASE_URL', 'LANGFUSE_BASE_URL') ?? 'https://cloud.langfuse.com';
-  const forcedOffline = ['1', 'true', 'yes'].includes((process.env.AGENT_SDK_OFFLINE ?? '').toLowerCase());
-  if (!publicKey || !secretKey || forcedOffline) return undefined;
-
-  const processor = new LangfuseSpanProcessor({
-    publicKey,
-    secretKey,
-    baseUrl,
-    shouldExportSpan: ({ otelSpan }) =>
-      isDefaultExportSpan(otelSpan) || otelSpan.instrumentationScope.name === STIGG_TRACER_NAME,
-  });
-  const provider = new NodeTracerProvider({ spanProcessors: [processor] });
-  provider.register();
-  return {
-    baseUrl,
-    sessionId: `chat-${randomUUID()}`,
-    handler: (sessionId: string, userId: string) => new LangfuseCallbackHandler({ sessionId, userId }),
-    /** One turn - the graph's spans and Stigg's - as one trace. */
-    turn: <T extends { messages: BaseMessage[] }>(
-      input: string,
-      sessionId: string,
-      userId: string,
-      run: () => Promise<T>,
-    ): Promise<T> =>
-      propagateAttributes({ sessionId, userId, tags: ['stigg-agent-sdk'] }, () =>
-        startActiveObservation(
-          'chat-turn',
-          async (observation) => {
-            observation.update({ input });
-            try {
-              const result = await run();
-              observation.update({ output: lastText(result.messages) });
-              return result;
-            } catch (err) {
-              observation.update({ level: 'ERROR', statusMessage: String(err) });
-              throw err;
-            }
-          },
-          { asType: 'agent' },
-        ),
-      ),
-    /** Flush before exit. A tracing failure is reported, never thrown. */
-    shutdown: async () => {
-      try {
-        await processor.forceFlush();
-        await provider.shutdown();
-      } catch (err) {
-        console.log(
-          paint(
-            'yellow',
-            `langfuse - traces were not delivered to ${baseUrl}: ${err instanceof Error ? err.message : String(err)}`,
-          ),
-        );
-      }
-    },
-  };
-}
-
-type DemoEnv = ReturnType<typeof resolveDemoEnv>;
 type Tally = Record<string, { checks: number; ingested: number; failed: number }>;
-const agentIdOf = (agent: string) => `agent-${agent}`;
+const agentIdOf = (cast: ChatCast, agent: string) => `${cast.agentIdPrefix ?? 'agent-'}${agent}`;
 /** The parent's budget: just above what its agents could spend together, so it caps the graph. */
 const parentBudget = (cast: ChatCast) =>
   Object.values(cast.agents).reduce((sum, agent) => sum + totalBudget(agent), 0) + 10;
@@ -294,7 +113,9 @@ const totalBudget = (agent: ChatCast['agents'][string]) =>
 
 /**
  * Registers the parent, then each agent under it - once at startup, idempotent. No `deregister`:
- * these agents outlive a turn. A parent and a budget need an entitlement.
+ * these agents outlive a turn. A parent and a budget need an entitlement. Called only when the
+ * account has governance: without it there is nowhere to write them, and the server checks every
+ * step against the customer's own entitlement instead.
  */
 async function registerAgents(
   stigg: StiggAgentSDK,
@@ -315,16 +136,18 @@ async function registerAgents(
     });
   await register(cast.parent, `Orchestrator (${framework})`, parentBudget(cast), demoEnv.teamId ?? null);
   for (const [agent, budgets] of Object.entries(cast.agents)) {
+    const agentId = agentIdOf(cast, agent);
     if (!('models' in budgets)) {
-      await register(agentIdOf(agent), `${agent} (${framework})`, budgets.budget, cast.parent);
+      await register(agentId, `${agent} (${framework})`, budgets.budget, cast.parent);
       continue;
     }
     // Its whole budget first: the scoped ones below cover only the models they name, so a call
     // naming no model, or another one, is capped here.
-    await register(agentIdOf(agent), `${agent} (${framework})`, totalBudget(budgets), cast.parent);
+    await register(agentId, `${agent} (${framework})`, totalBudget(budgets), cast.parent);
     // A budget per model: each model an entity of the dimensional type, and the agent holding one
     // budget scoped to each - registered once per scope, since each is its own assignment.
-    for (const [model, { budget }] of Object.entries(budgets.models)) {
+    for (const [name, { budget }] of Object.entries(budgets.models)) {
+      const model = modelRefId(name);
       await stigg.register({
         customerId: demoEnv.customerId,
         defaultPlanId: demoEnv.planId,
@@ -333,7 +156,7 @@ async function registerAgents(
       });
       await stigg.register({
         customerId: demoEnv.customerId,
-        agentId: agentIdOf(agent),
+        agentId,
         entityTypeId: agentType.entityTypeId,
         displayName: `${agent} (${framework})`,
         ...(entitlement
@@ -345,29 +168,28 @@ async function registerAgents(
 }
 
 /**
- * The one handler for the graph: the shared context once, each agent's own under `agents`, by the
- * name its framework knows it by. The customer is not here - it rides each `invoke`. Its hooks
- * print every check and report, and tally them per agent for the summary.
+ * The options for the graph: the shared context once, each agent's own under `agents`, by the
+ * name its framework knows it by. The customer is not here - each orchestrator states it per run
+ * its own way. The hooks print every check and report, and tally them per agent for the summary.
  */
-function createStiggHandler(stigg: StiggAgentSDK, demoEnv: DemoEnv, cast: ChatCast, searchName: string) {
+function governanceOptions(demoEnv: DemoEnv, cast: ChatCast, tally: Tally, search?: string): MiddlewareOptions {
   const { agentType, entitlement } = demoEnv;
-  const tally: Tally = {};
   const tallyOf = (agent = 'customer') => (tally[agent] ??= { checks: 0, ingested: 0, failed: 0 });
   const stiggLine = (agent: string | undefined, line: string) =>
     logAs(agent, `  ${paint(['blueBright', 'bold'], 'stigg')} ${line}`);
   // The researcher's search is a paid tool, priced by what it found: a credit per result.
-  const paidSearch = entitlement && {
-    [searchName]: {
-      entitlement,
-      usage: ({ output }: { output: unknown }) => ({ [entitlementId(entitlement)]: resultsIn(output) }),
-    },
-  };
+  const paidSearch = entitlement &&
+    search && {
+      [search]: {
+        entitlement,
+        usage: ({ output }: { output: unknown }) => ({ [entitlementId(entitlement)]: resultsIn(output) }),
+      },
+    };
 
-  const handler = new StiggLangChainCallbackHandler({
-    stigg,
+  return {
     stiggContext: {
       attributionKey: agentType?.attributionKey,
-      // Named, every call is checked; left out, the handler only meters.
+      // Named, every call is checked; left out, the graph is only metered.
       entitlement,
       usageMapper: entitlement && perTokens(entitlement, 1_000),
       eventName: demoEnv.ingestEventName,
@@ -381,9 +203,9 @@ function createStiggHandler(stigg: StiggAgentSDK, demoEnv: DemoEnv, cast: ChatCa
         agent,
         {
           stiggContext: {
-            agentId: agentType ? agentIdOf(agent) : undefined,
+            agentId: agentType ? agentIdOf(cast, agent) : undefined,
             // Its own price, when it has one: the same work costs this agent more. A price per model
-            // is the model call's own, in its `stiggContext` - see `asModel`.
+            // is the model call's own, in its `stiggContext`.
             usageMapper:
               entitlement && 'tokensPerCredit' in budgets && budgets.tokensPerCredit
                 ? perTokens(entitlement, budgets.tokensPerCredit)
@@ -410,61 +232,42 @@ function createStiggHandler(stigg: StiggAgentSDK, demoEnv: DemoEnv, cast: ChatCa
         stiggLine(agent, paint(result.ok ? 'dim' : 'red', line));
       },
     },
-  });
-  return { handler, tally };
+  };
 }
 
 /** Who is governed and how, then the chat's own header. */
-function printBanner(
-  framework: string,
-  demoEnv: DemoEnv,
-  cast: ChatCast,
-  searchIsCanned: boolean,
-  langfuse: Langfuse | undefined,
-) {
+function printBanner(framework: string, demoEnv: DemoEnv, cast: ChatCast, notes: string[], governed: boolean) {
   const { agentType, entitlement } = demoEnv;
   const agentNames = Object.keys(cast.agents);
-  const agents = agentNames.map(agentIdOf);
+  const agents = agentNames.map((agent) => agentIdOf(cast, agent));
   console.log(
     !entitlement
       ? `\n${paint(['yellow', 'bold'], 'metering mode:')} no entitlement, so nothing is checked - every call is ingested for ` +
           (agentType ? agents.join(', ') : `customer ${demoEnv.customerId}, with no agent attributed`)
-      : agentType
-        ? `\n${paint('bold', cast.parent)} limit=${paint('bold', String(parentBudget(cast)))} ${paint('dim', '- parent of:')}\n  ${agentNames
-            .map((agent, n) => {
-              const budgets = cast.agents[agent]!;
-              const limits =
-                'models' in budgets
-                  ? Object.entries(budgets.models)
-                      .map(([model, { budget }]) => `${model} limit=${paint('bold', String(budget))}`)
-                      .join(' ')
-                  : `limit=${paint('bold', String(budgets.budget))}`;
-              return `${paint([AGENT_STYLES[agent] ?? 'gray', 'bold'], agents[n]!)} ${limits}`;
-            })
-            .join(paint('dim', '  |  '))} ${paint('dim', entitlementId(entitlement))}`
-        : `\nno agent type, so every check is against customer ${paint('bold', demoEnv.customerId)}'s own ${entitlementId(entitlement)}`,
+      : agentType && !governed
+        ? `\nno governance on this account, so no budgets were registered - every check is against customer ${paint('bold', demoEnv.customerId)}'s own ${entitlementId(entitlement)}`
+        : agentType
+          ? `\n${paint('bold', cast.parent)} limit=${paint('bold', String(parentBudget(cast)))} ${paint('dim', '- parent of:')}\n  ${agentNames
+              .map((agent, n) => {
+                const budgets = cast.agents[agent]!;
+                const limits =
+                  'models' in budgets
+                    ? Object.entries(budgets.models)
+                        .map(([model, { budget }]) => `${model} limit=${paint('bold', String(budget))}`)
+                        .join(' ')
+                    : `limit=${paint('bold', String(budgets.budget))}`;
+                return `${paint([AGENT_STYLES[agent] ?? 'gray', 'bold'], agents[n]!)} ${limits}`;
+              })
+              .join(paint('dim', '  |  '))} ${paint('dim', entitlementId(entitlement))}`
+          : `\nno agent type, so every check is against customer ${paint('bold', demoEnv.customerId)}'s own ${entitlementId(entitlement)}`,
   );
 
   const rule = paint('dim', '─'.repeat(72));
   console.log(
     `\n${rule}\n${paint(['bold', 'blueBright'], ' Stigg')}${paint('bold', ` × ${framework}`)} ${paint('dim', '- a governed multi-agent chat')}\n${rule}`,
   );
-  console.log(
-    paint(
-      'dim',
-      `${cast.description}` +
-        (cast.searcher
-          ? `, at most ${MAX_CALLS_PER_TOOL} calls per tool per run, searching with ` +
-            `${searchIsCanned ? 'a canned stand-in (no Tavily key, or offline)' : 'Tavily'}`
-          : '') +
-        `. Type "exit", "quit" or an empty line to end.`,
-    ),
-  );
-  console.log(
-    langfuse
-      ? `${paint(['magenta', 'bold'], 'langfuse')} ${paint('dim', `tracing to ${langfuse.baseUrl}, session ${langfuse.sessionId}`)}\n`
-      : `${paint('dim', 'langfuse - not tracing (no AGENT_SDK_LANGFUSE_PUBLIC_KEY / _SECRET_KEY, or offline)')}\n`,
-  );
+  console.log(paint('dim', [cast.description, ...notes].join(', ') + '. Type "exit", "quit" or an empty line to end.'));
+  console.log();
 }
 
 /** Each agent's checks and reports, once the chat is over. */
@@ -478,19 +281,13 @@ function printSummary(tally: Tally): void {
   }
 }
 
-/** The governed chat around a graph built by `build`. */
-export async function runOrchestratorChat(
-  framework: string,
-  cast: ChatCast,
-  build: (kit: OrchestratorKit) => OrchestratorGraph,
-): Promise<void> {
-  const apiKey = optionalEnv('AGENT_SDK_ANTHROPIC_API_KEY', 'ANTHROPIC_API_KEY');
-  // First, so its provider exists before the first span.
-  const langfuse = startLangfuse();
+/** The governed chat around the graph `orchestrator` starts. */
+export async function runGovernedChat(cast: ChatCast, orchestrator: Orchestrator): Promise<void> {
+  const { framework } = orchestrator;
   const env = resolveStiggEnv();
   // Both optional: no entitlement meters without checking; no agent type runs at the customer level.
   const demoEnv = resolveDemoEnv(env);
-  const mock = await maybeStartMockServer(apiKey);
+  const mock = await maybeStartMockServer(orchestrator.apiKey);
   const stiggMock = await maybeStartMockStiggServer(env.offline);
   console.log(paint('dim', `[governance] ${describeSetup(env, demoEnv)}`));
 
@@ -501,42 +298,24 @@ export async function runOrchestratorChat(
   // 2. What the demo needs in Stigg, created if missing - the plan included, which the customer is
   //    provisioned onto by its first register. The team dwarfs the agents, so a refusal comes from
   //    an agent.
-  await prepareDemo(env, demoEnv, stigg, stiggMock, {
+  const { governanceEnabled } = await prepareDemo(env, demoEnv, stigg, stiggMock, {
     agents: [],
     teamLimit: 1_000,
     log: (line) => console.log(paint('dim', `[setup]${line}`)),
   });
   // 3. Register the agents, once.
-  await registerAgents(stigg, demoEnv, cast, framework);
+  if (governanceEnabled) await registerAgents(stigg, demoEnv, cast, framework);
 
-  // Real search only behind a real model - the mock's queries are canned.
-  const tavilyApiKey = optionalEnv('AGENT_SDK_TAVILY_API_KEY', 'TAVILY_API_KEY');
-  const search = tavilyApiKey && !mock ? new TavilySearch({ maxResults: 3, tavilyApiKey }) : webSearch;
-  const modelNamed = (name: string) =>
-    new ChatAnthropic({
-      model: name,
-      apiKey: apiKey ?? 'offline-mock',
-      anthropicApiUrl: mock?.baseUrl,
-      maxTokens: MAX_OUTPUT_TOKENS,
-    });
+  // 4. The orchestrator's graph, with the Stigg options attached its own way.
+  const tally: Tally = {};
+  const session = await orchestrator.start({
+    stigg,
+    demoEnv,
+    mock,
+    governance: (search) => governanceOptions(demoEnv, cast, tally, search),
+  });
+  printBanner(framework, demoEnv, cast, session.notes ?? [], governanceEnabled);
 
-  // 3. One handler for the graph.
-  const { handler: stiggHandler, tally } = createStiggHandler(stigg, demoEnv, cast, search.name);
-  const asModel = (agent: string, model: string, config: RunnableConfig): RunnableConfig => {
-    const budgets = cast.agents[agent];
-    const tokensPerCredit = budgets && 'models' in budgets ? budgets.models[model]?.tokensPerCredit : undefined;
-    const stiggContext: StiggContext = {
-      dimensions: { [MODEL_DIMENSION]: model },
-      ...(demoEnv.entitlement && tokensPerCredit
-        ? { usageMapper: perTokens(demoEnv.entitlement, tokensPerCredit) }
-        : {}),
-    };
-    return { ...config, metadata: { ...config.metadata, stiggContext } };
-  };
-  const graph = build({ stigg, model: modelNamed(MODEL), modelNamed, asModel, search });
-  printBanner(framework, demoEnv, cast, search === webSearch, langfuse);
-
-  let history: BaseMessage[] = [];
   const rl = createInterface({
     input: process.stdin,
     output: process.stdout,
@@ -551,22 +330,9 @@ export async function runOrchestratorChat(
       if (EXIT_WORDS.has(line.toLowerCase())) break;
 
       try {
-        // 4. Per run: the handler and the customer, handed by LangChain to every call beneath.
-        const config = {
-          recursionLimit: RECURSION_LIMIT,
-          callbacks: langfuse
-            ? [stiggHandler, langfuse.handler(langfuse.sessionId, demoEnv.customerId)]
-            : [stiggHandler],
-          metadata: { stiggContext: { customerId: demoEnv.customerId } },
-        };
-        const run = () => graph.turn(history, line, config);
-        const { messages } = langfuse
-          ? await langfuse.turn(line, langfuse.sessionId, demoEnv.customerId, run)
-          : await run();
-        history = messages;
-        console.log(`\n${paint(['cyan', 'bold'], 'assistant>')} ${lastText(messages)}\n`);
+        console.log(`\n${paint(['cyan', 'bold'], 'assistant>')} ${await session.turn(line)}\n`);
       } catch (err) {
-        // The lead itself was refused: the turn ends with the remedy and is not kept in history.
+        // The first agent itself was refused: the turn ends with the remedy.
         const decision = stigg.denial(err);
         if (!decision) throw err;
         console.log(
@@ -583,18 +349,14 @@ export async function runOrchestratorChat(
     await stigg.flush({ close: true });
     await mock?.close();
     await stiggMock?.close();
-    await langfuse?.shutdown();
+    await session.close?.();
   }
   console.log(paint('dim', '\nConversation ended.'));
 }
 
 /** Entry point for the examples beside this one. */
-export function startOrchestratorChat(
-  framework: string,
-  cast: ChatCast,
-  build: (kit: OrchestratorKit) => OrchestratorGraph,
-): void {
-  runOrchestratorChat(framework, cast, build).catch((err: unknown) => {
+export function startGovernedChat(cast: ChatCast, orchestrator: Orchestrator): void {
+  runGovernedChat(cast, orchestrator).catch((err: unknown) => {
     console.error(err instanceof Error ? err.message : err);
     process.exit(1);
   });

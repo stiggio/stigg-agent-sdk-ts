@@ -1,6 +1,6 @@
 {
   "name": "@stigg/agent-sdk-js",
-  "version": "0.7.1",
+  "version": "0.7.2",
   "private": true,
   "description": "Stigg agent SDK (JS) - run-lifecycle governance for agentic stacks, with examples per layer",
   "license": "MIT",
@@ -42,10 +42,11 @@
     "example-gateway-cloudflare": "tsx examples/gateway/cloudflare.ts",
     "example-gateway-bedrock": "tsx examples/gateway/bedrock.ts",
     "example-gateway-databricks": "tsx examples/gateway/databricks.ts",
-    "example-orchestrator-langchain": "tsx examples/orchestrator/langchain.ts",
-    "example-orchestrator-langgraph-handoff": "tsx examples/orchestrator/langgraph-handoff.ts",
-    "example-orchestrator-langgraph-model-fallback": "tsx examples/orchestrator/langgraph-model-fallback.ts",
-    "example-orchestrator-adk-handoff": "tsx examples/orchestrator/adk-handoff.ts"
+    "example-orchestrator-langchain": "tsx examples/orchestrator/langchain/langchain-handoff.ts",
+    "example-orchestrator-langgraph-handoff": "tsx examples/orchestrator/langchain/langgraph-handoff.ts",
+    "example-orchestrator-langgraph-model-fallback": "tsx examples/orchestrator/langchain/langgraph-model-fallback.ts",
+    "example-orchestrator-adk-handoff": "tsx examples/orchestrator/adk/adk-handoff.ts",
+    "example-orchestrator-adk-model-fallback": "tsx examples/orchestrator/adk/adk-model-fallback.ts"
   },
   "dependencies": {
     "@stigg/node-server-sdk": "^6.1.0",

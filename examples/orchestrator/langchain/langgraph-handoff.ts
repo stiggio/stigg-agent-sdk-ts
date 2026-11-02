@@ -13,6 +13,7 @@
  *
  * Run:  yarn example-orchestrator-langgraph-handoff
  */
+import '../../shared/load-env';
 import { AIMessage, HumanMessage, SystemMessage, ToolMessage, type BaseMessage } from '@langchain/core/messages';
 import type { RunnableConfig } from '@langchain/core/runnables';
 import type { StructuredToolInterface } from '@langchain/core/tools';
@@ -26,8 +27,8 @@ import {
   refusedTool,
   startOrchestratorChat,
   timedModelCall,
-} from './core/chat';
-import { logBlocked, logDone, logStart, logToolCall, logToolResult, preview } from './core/style';
+} from './kit';
+import { logBlocked, logDone, logStart, logToolCall, logToolResult, preview } from '../core/style';
 
 /** What one turn carries from node to node. */
 const Turn = Annotation.Root({

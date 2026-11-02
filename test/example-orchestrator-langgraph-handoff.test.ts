@@ -14,7 +14,7 @@ const PACKAGE_ROOT = join(__dirname, '..');
 
 describe('the LangGraph handoff example', () => {
   it('governs each node as its agent, and routes around a refused researcher', async () => {
-    const pending = run('yarn', ['tsx', 'examples/orchestrator/langgraph-handoff.ts'], {
+    const pending = run('yarn', ['tsx', 'examples/orchestrator/langchain/langgraph-handoff.ts'], {
       cwd: PACKAGE_ROOT,
       env: { ...process.env, ...EXAMPLE_ENV },
       timeout: 120_000,

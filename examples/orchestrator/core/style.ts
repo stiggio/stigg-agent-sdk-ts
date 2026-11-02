@@ -26,8 +26,8 @@ export const AGENT_STYLES: Record<string, Extract<Style, string>> = {
 export const tag = (agent: string | undefined): string =>
   paint([AGENT_STYLES[agent ?? ''] ?? 'gray', 'bold'], `[${agent ?? 'customer'}]`);
 
-/** The agents a turn starts with: the LangChain examples' lead, the ADK example's coordinator. */
-const TOP_AGENTS = new Set(['lead', 'coordinator']);
+/** The agents a turn starts with: the handoff examples' lead or coordinator, the model-fallback examples' assistant. */
+const TOP_AGENTS = new Set(['lead', 'coordinator', 'assistant']);
 const depthOf = (agent: string | undefined) => (!agent || TOP_AGENTS.has(agent) ? LEAD_DEPTH : SUBAGENT_DEPTH);
 
 /** A line under the trace of the agent it is about. */

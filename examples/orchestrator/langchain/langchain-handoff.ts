@@ -10,17 +10,21 @@
  *     search), so the turn degrades instead of failing;
  *   - a refused lead ends the turn with the remedy, and the chat goes on.
  *
- * The Stigg side - setup, the handler, the chat - is shared with the LangGraph example in `core/`.
+ * The Stigg side - setup, the options, the chat - is every orchestrator example's, in
+ * `../core/chat.ts`, and the scenario's agents and budgets are `../core/scenarios.ts`'s; the handler
+ * that carries the options, the model and the search are the LangGraph examples' too, in `kit.ts`.
+ *
  * Entitlement and agent type are both optional: blank `AGENT_SDK_DEMO_CURRENCY_ID` for metering
  * only, or the agent type for a customer-level run. Set `AGENT_SDK_LANGFUSE_*` to trace to Langfuse.
  * LangChain logs `Error in handler ...` for each refusal; that is its own line, and it is handled.
  *
  * Run:  yarn example-orchestrator-langchain
  */
+import '../../shared/load-env';
 import { AIMessage, ToolMessage, type BaseMessage } from '@langchain/core/messages';
 import { createAgent, createMiddleware, tool, toolCallLimitMiddleware } from 'langchain';
 import { z } from 'zod';
-import type { StiggAgentSDK } from '../../src';
+import type { StiggAgentSDK } from '../../../src';
 import {
   HANDOFF_CAST,
   MAX_CALLS_PER_TOOL,
@@ -32,8 +36,8 @@ import {
   startOrchestratorChat,
   thisRun,
   timedModelCall,
-} from './core/chat';
-import { logAs, logBlocked, logDone, logStart, logToolCall, logToolResult, paint, preview } from './core/style';
+} from './kit';
+import { logAs, logBlocked, logDone, logStart, logToolCall, logToolResult, paint, preview } from '../core/style';
 
 /** A call `toolCallLimitMiddleware` refused - its error result, as opposed to a tool that failed. */
 const isBlocked = (m: BaseMessage): m is ToolMessage =>

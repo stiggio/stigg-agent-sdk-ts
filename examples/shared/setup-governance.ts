@@ -35,6 +35,15 @@ const TEAM_ENTITY_TYPE = 'team';
 export const MODEL_ENTITY_TYPE = 'model';
 export const MODEL_DIMENSION = 'model';
 
+/**
+ * A model's id as Stigg takes it - an entity id, a scope and a dimension value are refIds
+ * (`^[a-zA-Z0-9][a-zA-Z0-9_|.-]*$`). A Vertex `models/...`, a versioned `...@...` or a Bedrock
+ * `...:...` id is not one, so every other character becomes `-`. The entity, its scope and every
+ * call's dimension all go through this, so they still match.
+ */
+export const modelRefId = (model: string): string =>
+  model.replace(/[^a-zA-Z0-9_|.-]/g, '-').replace(/^[^a-zA-Z0-9]+/, '');
+
 /** The product the demo plan sits under, and what the plan grants each month. */
 const DEMO_PRODUCT_ID = 'product-agent-sdk-demo';
 const DEMO_PLAN_CREDITS = 10_000;

@@ -14,7 +14,7 @@ const PACKAGE_ROOT = join(__dirname, '..');
 
 describe('the Google ADK handoff example', () => {
   it('governs each ADK agent as itself, and hands a refused researcher to the generalist', async () => {
-    const pending = run('yarn', ['tsx', 'examples/orchestrator/adk-handoff.ts'], {
+    const pending = run('yarn', ['tsx', 'examples/orchestrator/adk/adk-handoff.ts'], {
       cwd: PACKAGE_ROOT,
       env: { ...process.env, ...EXAMPLE_ENV },
       timeout: 120_000,

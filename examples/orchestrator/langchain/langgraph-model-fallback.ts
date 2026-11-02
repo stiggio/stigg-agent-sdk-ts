@@ -12,30 +12,26 @@
  *
  * Run:  yarn example-orchestrator-langgraph-model-fallback
  */
+import '../../shared/load-env';
 import { AIMessage, HumanMessage, SystemMessage, type BaseMessage } from '@langchain/core/messages';
 import type { RunnableConfig } from '@langchain/core/runnables';
 import { Annotation, END, START, StateGraph } from '@langchain/langgraph';
-import { MODEL, startOrchestratorChat, timedModelCall, type ChatCast } from './core/chat';
-import { logAs, logStart, paint } from './core/style';
+import type { ChatCast } from '../core/chat';
+import { MODEL_FALLBACK } from '../core/scenarios';
+import { MODEL, startOrchestratorChat, timedModelCall } from './kit';
+import { logAs, logStart, paint } from '../core/style';
 
 /** The cheaper model the agent falls back to. */
 const FALLBACK_MODEL = process.env.AGENT_SDK_ANTHROPIC_FALLBACK_MODEL || 'claude-haiku-5-5';
 
-/** Opus runs dry within a few turns offline: a credit buys it a hundred tokens, and Haiku two thousand. */
+/** The model-fallback scenario as one agent with a budget per model: Opus the expensive one, Haiku the cheap. */
 const MODEL_FALLBACK_CAST: ChatCast = {
   agents: {
-    assistant: {
-      models: {
-        [MODEL]: { budget: 4, tokensPerCredit: 100 },
-        [FALLBACK_MODEL]: { budget: 50, tokensPerCredit: 2_000 },
-      },
-    },
+    assistant: { models: { [MODEL]: MODEL_FALLBACK.expensive, [FALLBACK_MODEL]: MODEL_FALLBACK.cheap } },
   },
   description: `Chatting with one assistant on ${MODEL}, falling back to ${FALLBACK_MODEL} once its credits run out`,
   parent: 'agent-model-fallback',
 };
-
-const SYSTEM = 'You are a helpful assistant. Answer briefly and clearly.';
 
 /** What one turn carries. */
 const Turn = Annotation.Root({
@@ -50,7 +46,7 @@ startOrchestratorChat('LangGraph', MODEL_FALLBACK_CAST, ({ stigg, modelNamed, as
 
   const assistant = async ({ history, request }: TurnState, config: RunnableConfig) => {
     logStart('assistant', request);
-    const messages = [new SystemMessage(SYSTEM), ...history, new HumanMessage(request)];
+    const messages = [new SystemMessage(MODEL_FALLBACK.instruction), ...history, new HumanMessage(request)];
     try {
       const reply = await timedModelCall(
         'assistant',

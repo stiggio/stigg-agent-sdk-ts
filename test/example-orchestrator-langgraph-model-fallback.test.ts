@@ -14,7 +14,7 @@ const PACKAGE_ROOT = join(__dirname, '..');
 
 describe('the LangGraph model-fallback example', () => {
   it('answers with the expensive model until its own budget runs out, then with the cheaper one, in the same node', async () => {
-    const pending = run('yarn', ['tsx', 'examples/orchestrator/langgraph-model-fallback.ts'], {
+    const pending = run('yarn', ['tsx', 'examples/orchestrator/langchain/langgraph-model-fallback.ts'], {
       cwd: PACKAGE_ROOT,
       env: { ...process.env, ...EXAMPLE_ENV },
       timeout: 120_000,
@@ -39,5 +39,25 @@ describe('the LangGraph model-fallback example', () => {
     // Every turn tries Opus first, so both later turns switch, and every turn is answered.
     assert.equal(stdout.match(/switching model/g)?.length, 2);
     assert.equal(stdout.match(/assistant>/g)?.length, 5);
+  });
+
+  it('takes a model id that is not a refId, such as a Bedrock one', async () => {
+    const pending = run('yarn', ['tsx', 'examples/orchestrator/langchain/langgraph-model-fallback.ts'], {
+      cwd: PACKAGE_ROOT,
+      env: {
+        ...process.env,
+        ...EXAMPLE_ENV,
+        AGENT_SDK_ANTHROPIC_FALLBACK_MODEL: 'us.anthropic.claude-haiku-5-5-v1:0',
+      },
+      timeout: 120_000,
+    });
+    pending.child.stdin?.end('What is metering?\nWhy per agent?\nAnd per model?\nFourth?\n');
+    const { stdout } = await pending;
+
+    // Registered under the refId Stigg takes, and the turns that fall back to it are answered.
+    assert.match(stdout, /us\.anthropic\.claude-haiku-5-5-v1-0 registered/);
+    assert.ok(stdout.includes('answering with us.anthropic.claude-haiku-5-5-v1:0'));
+    assert.equal(stdout.match(/assistant>/g)?.length, 4);
+    assert.doesNotMatch(stdout, /refused by/);
   });
 });

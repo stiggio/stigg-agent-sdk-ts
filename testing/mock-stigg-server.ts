@@ -257,6 +257,9 @@ export function seedBudget(
 /** The mock's default page of assignments - small, so a test crosses pages with a few dozen. */
 const ASSIGNMENTS_PAGE_SIZE = 20;
 
+/** What Stigg takes as an id - `REF_ID_REGEX` in `@stigg/validation`. */
+const REF_ID = /^[a-zA-Z0-9][a-zA-Z0-9_|.-]*$/;
+
 /** An assignment is one `(entity, capability, scope)` triple, as Stigg keys it. */
 const assignmentKey = (entityId: string, capabilityId: string, scopeEntityIds: string[] = []) =>
   scopeEntityIds.length
@@ -982,6 +985,12 @@ function route(server: MockStiggServer, req: IncomingMessage, res: ServerRespons
     const state = customer(mock, customerId);
 
     if (rest === '/entities' && method === 'PUT') {
+      // An entity id is a refId, and Stigg refuses the write of one that is not.
+      const invalid = (body.entities ?? []).find((entity: { id: string }) => !REF_ID.test(entity.id));
+      if (invalid) {
+        send(res, 400, { code: 'BadRequest', message: `id must match ${REF_ID.source}, got ${invalid.id}` });
+        return;
+      }
       for (const entity of body.entities ?? []) {
         const existing = state.entities.get(entity.id);
         state.entities.set(entity.id, { ...existing, ...entity, archivedAt: undefined });
