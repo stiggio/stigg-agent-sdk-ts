@@ -199,4 +199,13 @@ export type {
   StepAttribution,
   ToolStep,
 } from './bindings/orchestrator/core/agent-middleware';
+// The Vercel AI SDK binding (`ai` 6 and 7): a middleware for `wrapLanguageModel`. On the main entry
+// because it imports nothing from `ai` - a middleware is a plain object.
+export { stiggVercelMiddleware } from './bindings/orchestrator/vercel-ai/middleware';
+export type {
+  StiggVercelMiddleware,
+  StiggVercelMiddlewareOptions,
+  VercelAIMetric,
+  VercelAIMetrics,
+} from './bindings/orchestrator/vercel-ai/middleware';
 export { normalizedMetrics, normalizeUsage } from './bindings/shared/token-usage';
