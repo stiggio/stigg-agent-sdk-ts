@@ -80,7 +80,7 @@ export async function createGovernanceEngine(config: EngineConfig): Promise<Crea
     const resolution = customerLevel('governance not enabled for this account');
     return {
       engine: new CompositeEngine({
-        delegates: { check: nodeSdk, report: nodeSdk },
+        delegates: { check: nodeSdk, report: nodeSdk, provisionCustomer: nodeSdk },
         fallback: rest,
         resolution,
         logger: config.logger,
@@ -98,7 +98,14 @@ export async function createGovernanceEngine(config: EngineConfig): Promise<Crea
     engine: new CompositeEngine({
       // An attributed check goes to REST because only it returns chains; an unattributed one has
       // no chain to lose, and ingest prefers the cached SDK either way.
-      delegates: { upsertEntity: rest, check: rest, unattributedCheck: nodeSdk, report: nodeSdk, archiveEntity: rest },
+      delegates: {
+        upsertEntity: rest,
+        check: rest,
+        unattributedCheck: nodeSdk,
+        report: nodeSdk,
+        archiveEntity: rest,
+        provisionCustomer: nodeSdk,
+      },
       fallback: rest,
       resolution,
       logger: config.logger,

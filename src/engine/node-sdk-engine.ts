@@ -24,6 +24,7 @@ import type {
   EngineReportParams,
   EngineReportResult,
   GovernanceEngine,
+  ProvisionOutcome,
 } from './engine';
 
 /**
@@ -80,6 +81,27 @@ export type NodeSdkEngineOptions = {
    */
   client?: NodeSdkClient;
 };
+
+/**
+ * The API's own code for an error it answered with. Absent when nothing answered - a refused
+ * connection, a dropped socket - which is what tells a refusal apart from an outage.
+ */
+const errorCode = (err: unknown): string | undefined => (err as { errorCode?: string })?.errorCode;
+
+/**
+ * The failures that say nothing about the customer - a rate limit, a timeout, an unexpected error -
+ * so asking again later may succeed. Every other code Stigg answers with is a final answer about
+ * this customer or this configuration - an unknown plan, a key that cannot write, an invalid id -
+ * and asking again gets the same one.
+ */
+const PASSING_FAILURES = new Set([
+  'RateLimitExceeded',
+  'OperationTimeout',
+  'UnexpectedError',
+  'RequestTimeout',
+  // A lock another request holds on the customer - creating one takes it.
+  'ObjectAlreadyBeingUsedByAnotherRequestError',
+]);
 
 const LOCAL_HOSTS = new Set(['localhost', '127.0.0.1', '::1', '[::1]']);
 
@@ -169,6 +191,39 @@ export class NodeSdkEngine implements GovernanceEngine {
    */
   async preload(customerId: string): Promise<void> {
     await this.client.reloadEntitlements(customerId);
+  }
+
+  /**
+   * One mutation, no lookup first. Stigg refuses to provision a customer it already has - the
+   * whole mutation, subscription included - so an existing customer comes back as a duplicate and
+   * is left exactly as they were. Reading first would only add a round trip to every customer's
+   * first call in each process, to learn what the create already says.
+   *
+   * Here rather than on REST because the Node SDK creates the customer and the subscription in one
+   * mutation, and writes the entitlements it answers with straight into the cache - so the check
+   * that follows reads the new plan locally instead of fetching it.
+   *
+   * Resolves with a final answer - created, duplicate, or a refusal that will be the same next
+   * time. Throws for a passing failure - unreachable, rate limited, timed out - so the customer is
+   * asked again later: remembering one as a refusal would deny that customer until the process
+   * restarts.
+   */
+  async provisionCustomer(customerId: string, planId: string): Promise<ProvisionOutcome> {
+    try {
+      const provisioned = await this.client.provisionCustomer({ customerId, subscriptionParams: { planId } });
+      return {
+        status: 'created',
+        decision: provisioned.subscriptionDecisionStrategy,
+        planId: provisioned.subscription?.planId,
+      };
+    } catch (err) {
+      const code = errorCode(err);
+      if (code === 'DuplicatedEntityNotAllowed') return { status: 'existing' };
+      if (code && !PASSING_FAILURES.has(code)) {
+        return { status: 'rejected', code, reason: err instanceof Error ? err.message : String(err) };
+      }
+      throw asEngineError('provisionCustomer', err);
+    }
   }
 
   async upsertEntity(): Promise<void> {

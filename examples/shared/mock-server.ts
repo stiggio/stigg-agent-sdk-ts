@@ -97,26 +97,53 @@ function openSse(res: ServerResponse, headers: Record<string, string> = {}): voi
 // Anthropic Messages API
 // ----------------------------------------------------------------------------------------
 
-/** True when tools are on offer and none has been called yet, so the turn should call one. */
-function shouldCallTool(body: any): boolean {
-  if (!body.tools?.length) return false;
-  for (const message of body.messages ?? []) {
+/**
+ * The first tool on offer that this turn has not called yet, or none once each has been.
+ *
+ * One per turn, in the order offered - so an agent holding a single tool calls it once and then
+ * answers, and an orchestrator holding several subagents as tools delegates to each in turn,
+ * which is the only way a lead agent reaches more than one of them with no model behind it.
+ *
+ * A turn starts at the latest message the user typed, so a chat delegates again on every new
+ * request rather than once per conversation. Tool results also arrive as `user` messages - those
+ * are the turn continuing, not a new one.
+ */
+function nextToolToCall(body: any): any {
+  if (!body.tools?.length) return undefined;
+  const messages: any[] = body.messages ?? [];
+  const isToolResult = (message: any) =>
+    Array.isArray(message.content) && message.content.some((block: any) => block?.type === 'tool_result');
+  let turnStart = messages.length - 1;
+  while (turnStart > 0 && (messages[turnStart].role !== 'user' || isToolResult(messages[turnStart]))) turnStart -= 1;
+  const called = new Set<string>();
+  for (const message of messages.slice(turnStart)) {
     if (!Array.isArray(message.content)) continue;
-    if (message.content.some((block: any) => block?.type === 'tool_result')) return false;
+    for (const block of message.content) if (block?.type === 'tool_use') called.add(block.name);
   }
-  return true;
+  return body.tools.find((tool: any) => !called.has(tool.name));
+}
+
+/**
+ * Arguments a tool will accept: canned text for each string field it declares. A tool declaring
+ * none gets the first two numbers in the conversation, so a calculator's result looks sensible.
+ */
+function toolInput(tool: any, messages: unknown): Record<string, unknown> {
+  const strings = Object.entries(tool.input_schema?.properties ?? {})
+    .filter(([, schema]: [string, any]) => schema?.type === 'string')
+    .map(([name]) => [name, `mock ${name} for ${tool.name}`]);
+  return strings.length ? Object.fromEntries(strings) : numbersIn(messages);
 }
 
 function anthropicMessage(body: any) {
   const inputTokens = estimateTokens(body.messages);
-  const content = shouldCallTool(body)
+  const tool = nextToolToCall(body);
+  const content = tool
     ? [
         {
           type: 'tool_use',
           id: `toolu_mock${Math.random().toString(16).slice(2, 10)}`,
-          name: body.tools[0].name,
-          // Reuse the first two numbers in the conversation so tool results look sensible.
-          input: numbersIn(body.messages),
+          name: tool.name,
+          input: toolInput(tool, body.messages),
         },
       ]
     : [{ type: 'text', text: ANTHROPIC_TEXT }];
@@ -195,7 +222,7 @@ function streamAnthropic(res: ServerResponse, message: ReturnType<typeof anthrop
  * make the example prove nothing: the arithmetic the recipe exists to get right would be absent
  * from the fixture it is read against.
  */
-function geminiUsage(body: any, text: string) {
+function geminiUsage(body: any, text: unknown) {
   const promptTokenCount = estimateTokens(body.contents);
   const candidatesTokenCount = estimateTokens(text);
   const thoughtsTokenCount = Math.floor(candidatesTokenCount / 5);
@@ -208,15 +235,87 @@ function geminiUsage(body: any, text: string) {
   };
 }
 
-const geminiResponse = (body: any, model: string, text: string, finished = true, responseId = newResponseId()) => ({
+/**
+ * The function this turn calls next, and what with - or none, and the turn is answered in text.
+ *
+ * The Anthropic mock's rule - each function on offer once per turn, in the order offered - with one
+ * addition for a parameter that is an enum, which is how ADK declares `transfer_to_agent`: such a
+ * function is called once per value, each value at most once a turn, and only after the plain ones -
+ * so an agent uses its own tools before it hands the turn on, hands off to each agent it can reach
+ * once, and a chain of handoffs ends. A request with function calling set to `NONE` calls nothing.
+ *
+ * A turn starts at the latest message the user typed. A function's result is a `user` message too,
+ * and so is ADK's account of what the other agents did (`For context: ...`) - both are the turn
+ * continuing, not a new one.
+ */
+function nextGeminiCall(body: any): { name: string; args: Record<string, unknown> } | undefined {
+  const propertiesOf = (declaration: any): Record<string, any> =>
+    declaration.parameters?.properties ?? declaration.parametersJsonSchema?.properties ?? {};
+  const handsOff = (declaration: any) =>
+    Object.values(propertiesOf(declaration)).some((schema: any) => Array.isArray(schema?.enum));
+  const offered: any[] = (body.tools ?? []).flatMap((tool: any) => tool.functionDeclarations ?? []);
+  // Function calling turned off, as Gemini honours it: the functions are declared, never called.
+  if (!offered.length || body.toolConfig?.functionCallingConfig?.mode === 'NONE') return undefined;
+  const declarations = [...offered.filter((d) => !handsOff(d)), ...offered.filter(handsOff)];
+  const contents: any[] = body.contents ?? [];
+  const continues = (content: any) =>
+    (content.parts ?? []).some((part: any) => part.functionResponse || part.text === 'For context:');
+  let turnStart = contents.length - 1;
+  while (turnStart > 0 && (contents[turnStart].role !== 'user' || continues(contents[turnStart]))) turnStart -= 1;
+  // This agent's own calls, and the ones ADK reports other agents made (`[agent] called tool
+  // \`name\` with parameters: {...}`) - so a chain never hands back to an agent already reached.
+  const reported = (text: string) => {
+    const match = /called tool `([^`]+)` with parameters: (\{.*\})$/.exec(text);
+    if (!match) return undefined;
+    try {
+      return { name: match[1], args: JSON.parse(match[2]) };
+    } catch {
+      return undefined;
+    }
+  };
+  const calls = contents
+    .slice(turnStart)
+    .flatMap((content: any) =>
+      (content.parts ?? []).map((part: any) => part.functionCall ?? (part.text ? reported(part.text) : undefined)),
+    )
+    .filter(Boolean);
+
+  for (const declaration of declarations) {
+    const made = calls.filter((call: any) => call.name === declaration.name);
+    const properties = propertiesOf(declaration);
+    const args: Record<string, unknown> = {};
+    let exhausted = made.length > 0;
+    for (const [name, schema] of Object.entries(properties)) {
+      if (Array.isArray(schema?.enum)) {
+        const unused = schema.enum.find((value: unknown) => !made.some((call: any) => call.args?.[name] === value));
+        exhausted = unused === undefined;
+        if (unused !== undefined) args[name] = unused;
+      } else if (String(schema?.type).toLowerCase() === 'string') {
+        args[name] = `mock ${name} for ${declaration.name}`;
+      }
+    }
+    if (!exhausted) return { name: declaration.name, args };
+  }
+  return undefined;
+}
+
+const geminiResponse = (
+  body: any,
+  model: string,
+  text: string,
+  finished = true,
+  responseId = newResponseId(),
+  // `null` for a stream's text chunks, which the stream has already decided carry no call.
+  call: { name: string; args: Record<string, unknown> } | null | undefined = nextGeminiCall(body),
+) => ({
   candidates: [
     {
-      content: { parts: [{ text }], role: 'model' },
+      content: { parts: [call ? { functionCall: call } : { text }], role: 'model' },
       ...(finished ? { finishReason: 'STOP' } : {}),
       index: 0,
     },
   ],
-  usageMetadata: geminiUsage(body, text),
+  usageMetadata: geminiUsage(body, call ?? text),
   modelVersion: model,
   responseId,
 });
@@ -231,6 +330,12 @@ const geminiResponse = (body: any, model: string, text: string, finished = true,
  */
 function streamGemini(res: ServerResponse, body: any, model: string): void {
   openSse(res);
+  // A function call arrives whole, in one chunk, as Gemini sends it.
+  if (nextGeminiCall(body)) {
+    res.write(`data: ${JSON.stringify(geminiResponse(body, model, ''))}\n\n`);
+    res.end();
+    return;
+  }
   const words = GEMINI_TEXT.split(' ');
   // One id for the whole stream. Every chunk of a round carries the same `responseId` on the
   // wire, and a recipe reads the change as the boundary between automatic-function-calling
@@ -242,7 +347,7 @@ function streamGemini(res: ServerResponse, body: any, model: string): void {
     const piece = index === words.length - 1 ? word : `${word} `;
     sent += piece;
     // The usage block describes everything produced so far, which is what makes it cumulative.
-    const chunk = geminiResponse(body, model, piece, index === words.length - 1, responseId);
+    const chunk = geminiResponse(body, model, piece, index === words.length - 1, responseId, null);
     res.write(`data: ${JSON.stringify({ ...chunk, usageMetadata: geminiUsage(body, sent) })}\n\n`);
   });
   res.end();

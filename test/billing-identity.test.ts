@@ -75,6 +75,37 @@ describe('a call that names a customer must name one', () => {
   }
 });
 
+describe('a default plan sits beside the customer, not inside it', () => {
+  const base = resolveContext({ defaultPlanId: ' plan-free ' }, 'run-1', { requireCustomer: false });
+
+  it('is given at wrap and kept by a call that names only its customer', () => {
+    const call = overrideContext(base, { customerId: 'customer-acme' });
+    assert.equal(call.customerId, 'customer-acme');
+    assert.equal(call.defaultPlanId, 'plan-free');
+  });
+
+  it('is replaced by a call that names its own', () => {
+    assert.equal(overrideContext(base, { defaultPlanId: 'plan-pro' }).defaultPlanId, 'plan-pro');
+  });
+
+  it('stays absent when nobody names one', () => {
+    const none = resolveContext({ customerId: 'customer-acme' }, 'run-1');
+    assert.equal(none.defaultPlanId, undefined);
+  });
+
+  for (const blank of ['', '   ', null, 0]) {
+    it(`throws on ${JSON.stringify(blank)} rather than provisioning onto nothing`, () => {
+      // A blank string is called empty; anything else is named by its type, not called empty.
+      const said = typeof blank === 'string' ? /defaultPlanId is empty/ : /defaultPlanId must be a plan id string/;
+      assert.throws(() => overrideContext(base, { defaultPlanId: blank as unknown as string }), said);
+      assert.throws(
+        () => resolveContext({ defaultPlanId: blank as unknown as string }, 'run-1', { requireCustomer: false }),
+        said,
+      );
+    });
+  }
+});
+
 describe('the API key is readable and not printable', () => {
   const sdk = new StiggAgentSDK({ ...BASE, apiKey: 'server-SUPERSECRET' });
 

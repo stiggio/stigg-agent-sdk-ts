@@ -12,7 +12,8 @@
 import assert from 'node:assert/strict';
 import { describe, it, after } from 'node:test';
 import { startMockStiggServer, type MockStiggServer } from '../testing/mock-stigg-server';
-import { PROXY_EVENT_NAMES, seedMock } from '../examples/shared/setup-governance';
+import { PROXY_EVENT_NAMES, prepareDemo, seedOfflineAccount } from '../examples/shared/setup-governance';
+import type { StiggEnv } from '../examples/shared/stigg-env';
 import { StiggAgentSDK } from '../src/stigg-agent-sdk';
 import { unitsPerTokens } from '../src';
 import { DEFAULT_RECIPES, eventNameFor } from '../src/internal';
@@ -28,12 +29,12 @@ let shared: { stigg: StiggAgentSDK; mock: MockStiggServer } | undefined;
 async function reporting(): Promise<{ stigg: StiggAgentSDK; mock: MockStiggServer }> {
   if (shared) return shared;
   const mock = await startMockStiggServer();
-  await seedMock(demoEnv({ featureId: 'tokens_used' }), mock, {
+  const stigg = new StiggAgentSDK({ apiKey: 'offline-key', baseUrl: mock.baseUrl, logger: 'none' });
+  await prepareDemo({ offline: true } as StiggEnv, demoEnv({ featureId: 'tokens_used' }), stigg, mock, {
     agents: ['agent-1'],
     agentLimit: 5,
     log: () => undefined,
   });
-  const stigg = new StiggAgentSDK({ apiKey: 'offline-key', baseUrl: mock.baseUrl, logger: 'none' });
   await stigg.init();
   shared = { stigg, mock };
   return shared;
@@ -42,7 +43,7 @@ async function reporting(): Promise<{ stigg: StiggAgentSDK; mock: MockStiggServe
 /** Seeding only, with no SDK to talk to it - safe to create as many of these as the cases need. */
 async function seededMock(entitlement: DemoEnv['entitlement']): Promise<MockStiggServer> {
   const mock = await startMockStiggServer();
-  await seedMock(demoEnv(entitlement), mock, { agents: ['agent-1'], agentLimit: 5, log: () => undefined });
+  seedOfflineAccount(mock.state, demoEnv(entitlement));
   mocks.push(mock);
   return mock;
 }

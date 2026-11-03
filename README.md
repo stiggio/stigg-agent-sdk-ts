@@ -73,6 +73,57 @@ try {
 the shortest path from nothing to working metering is a currency and a `customerId` — no catalog
 modelling first.
 
+## 🕸️ Governing an agent graph
+
+A wrapper governs one client. A LangChain or LangGraph graph runs many agents and tools, so it
+gets one handler instead, passed on `invoke` — LangChain hands it to every model and tool call
+beneath, sub-agents included. Each agent is checked and reports its usage as itself. It imports
+`@langchain/core`, an optional peer, so it uses the copy your application already has.
+
+```ts
+import { StiggAgentSDK } from '@stigg/agent-sdk-js';
+import { StiggLangChainCallbackHandler } from '@stigg/agent-sdk-js/langchain';
+
+const stigg = new StiggAgentSDK();
+const credits = { currencyId: 'credits' };
+
+// Once per customer: each agent an entity with its own budget - what `agentId` below names.
+for (const agentId of ['agent-researcher', 'agent-writer']) {
+  await stigg.register({ customerId: 'customer-acme', agentId, entityTypeId: 'agent', budget: { entitlement: credits, limit: 100 } });
+}
+
+const stiggHandler = new StiggLangChainCallbackHandler({
+  stigg,
+  stiggContext: { attributionKey: 'agentId', entitlement: credits }, // the whole graph
+  agents: {
+    // by the name LangChain knows the agent or node by
+    researcher: { stiggContext: { agentId: 'agent-researcher' }, tools: { web_search: credits } },
+    writer: { stiggContext: { agentId: 'agent-writer' } },
+  },
+});
+
+await graph.invoke(input, {
+  callbacks: [stiggHandler],
+  metadata: { stiggContext: { customerId: 'customer-acme' } }, // per run
+});
+```
+
+Both take the same `stiggContext`, merged the same way — only where it attaches differs:
+
+| | Wrapper | Agent graph |
+| --- | --- | --- |
+| Attaches to | one vendor client | the graph's `invoke` |
+| The whole thing | `wrap(client, { stiggContext })` | `new StiggLangChainCallbackHandler({ stiggContext })` |
+| Per agent | a wrapped client per agent | `agents[name].stiggContext` |
+| Per request | `create({ ..., stiggContext })` | `invoke(input, { metadata: { stiggContext } })` |
+| Tools | not seen | `tools`, checked and metered per call |
+| A refusal | the call throws | the step throws, and the graph decides — a refused sub-agent reads to its lead as a failed tool call |
+
+The [LangChain and LangGraph guide](docs/langchain.md) has every configuration. A Google ADK graph
+takes the same options as one plugin on its Runner — `new StiggAdkPlugin(...)` from
+`@stigg/agent-sdk-js/adk` — plus a `stepContext` that names the customer, since ADK has no per-run
+metadata ([guide](docs/guide.md#google-adk-one-plugin-per-runner)).
+
 ## 🧭 How it works
 
 Three things happen around a call you already make:
@@ -105,6 +156,13 @@ closed, and conflating them is how an outage takes an application down.
 | <img src="https://raw.githubusercontent.com/stiggio/stigg-agent-sdk-ts/main/docs/logos/cloudflare.svg" width="18" alt=""> | Cloudflare Workers AI | <img src="https://raw.githubusercontent.com/stiggio/stigg-agent-sdk-ts/main/docs/logos/openrouter.svg" width="18" alt=""> | OpenRouter |
 | <img src="https://raw.githubusercontent.com/stiggio/stigg-agent-sdk-ts/main/docs/logos/databricks.svg" width="18" alt=""> | Databricks | | |
 
+**Orchestrators** — every agent in a graph checked and metered as itself, its tools included:
+
+| | Orchestrator | | Orchestrator |
+| --- | --- | --- | --- |
+| <img src="https://raw.githubusercontent.com/stiggio/stigg-agent-sdk-ts/main/docs/logos/langchain.svg" width="18" alt=""> | [LangChain](docs/langchain.md) | <img src="https://raw.githubusercontent.com/stiggio/stigg-agent-sdk-ts/main/docs/logos/langgraph.svg" width="18" alt=""> | [LangGraph](docs/langchain.md#a-hand-built-langgraph) |
+| <img src="https://raw.githubusercontent.com/stiggio/stigg-agent-sdk-ts/main/docs/logos/google-adk.png" width="18" alt=""> | [Google ADK](docs/guide.md#google-adk-one-plugin-per-runner) | | Your own harness, through `stigg.middleware()` |
+
 Each binding is written against the *shape a vendor returns*, not against its SDK — so installing
 this package pulls in **no vendor packages at all**, and you install only the one you use.
 
@@ -119,7 +177,11 @@ rather than handing back a client that quietly meters nothing.
 | Gate without a client to wrap | `stigg.check(context)` |
 | Meter something you measured yourself | `stigg.report(context, metrics)` |
 | Give an agent its own budget | `stigg.register({ customerId, agentId, budget })` |
+| Start new customers on a plan | `stiggContext: { defaultPlanId }`, beside `customerId` |
 | Meter a gateway you operate | `client.stigg.headers()` out, `stigg.ingestFromHeaders(...)` back |
+| Govern a LangChain / LangGraph agent graph ([guide](docs/langchain.md)) | `new StiggLangChainCallbackHandler({ stigg, agents, tools })` from `@stigg/agent-sdk-js/langchain` |
+| Govern a Google ADK agent graph ([guide](docs/guide.md#google-adk-one-plugin-per-runner)) | `new StiggAdkPlugin({ stigg, agents, tools, stepContext })` from `@stigg/agent-sdk-js/adk`, in the Runner's `plugins` |
+| Govern a graph from your own harness | `stigg.middleware({ stiggContext, agents })` |
 
 One wrapped client serves every customer and every agent: the context is an argument, given once at
 `wrap` as a default and overridable inside any single call.

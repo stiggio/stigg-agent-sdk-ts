@@ -15,6 +15,7 @@ import { describe, it } from 'node:test';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { join } from 'node:path';
+import { EXAMPLE_ENV } from './pinned-demo-env';
 
 const run = promisify(execFile);
 const PACKAGE_ROOT = join(__dirname, '..');
@@ -24,7 +25,7 @@ describe('the two-agent example', () => {
     const { stdout } = await run('yarn', ['tsx', 'examples/client/two-agents.ts'], {
       cwd: PACKAGE_ROOT,
       // Forced, so the test never depends on whatever keys happen to be in the developer's .env.
-      env: { ...process.env, AGENT_SDK_OFFLINE: '1' },
+      env: { ...process.env, ...EXAMPLE_ENV },
       timeout: 120_000,
     });
 

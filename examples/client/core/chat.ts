@@ -15,7 +15,7 @@ import { createInterface } from 'node:readline/promises';
 import { StiggAgentSDK, unitsPerTokens, entitlementId, normalizeUsage, type TokenUsage } from '../../../src';
 import { maybeStartMockServer } from '../../shared/mock-server';
 import { maybeStartMockStiggServer } from '../../shared/mock-stigg-server';
-import { seedMock } from '../../shared/setup-governance';
+import { prepareDemo } from '../../shared/setup-governance';
 import { agentIdFor, describeSetup, resolveDemoEnv, type DemoEnv } from '../../shared/demo-env';
 import { requireKey, resolveStiggEnv, type StiggEnv } from '../../shared/stigg-env';
 import { optionalEnv, type ChatMessage, type ChatVendor } from './vendor';
@@ -50,23 +50,11 @@ function printUsage(label: string, t: TokenUsage): void {
   );
 }
 
-async function startMocksAndGovernance(apiKey: string | undefined, env: StiggEnv, demoEnv: DemoEnv) {
+async function startMocks(apiKey: string | undefined, env: StiggEnv) {
   // Vendor side: with no key (or with AGENT_SDK_OFFLINE set), fall back to the local mock.
   const vendorMock = await maybeStartMockServer(apiKey);
-
   // Stigg side: whichever environment STIGG_SERVER_API_KEY and STIGG_BASE_URL point at.
   const stiggMock = await maybeStartMockStiggServer(env.offline);
-  // The account's own setup: the entity types, the parent team, a funded pool. Not the agent -
-  // that is this application's to provision, below.
-  if (stiggMock) {
-    await seedMock(demoEnv, stiggMock, {
-      agents: [],
-      teamLimit: AGENT_BUDGET * 2,
-      // The pool must dwarf the per-agent budget, or a denial would come from an empty wallet.
-      poolMin: AGENT_BUDGET * 4,
-      log: () => undefined,
-    });
-  }
   return { vendorMock, stiggMock };
 }
 
@@ -94,12 +82,20 @@ export async function runChat(vendor: ChatVendor): Promise<void> {
   const vendorApiKey = optionalEnv(...vendor.keyVars);
 
   // Demo scaffolding: with no keys, stand-ins for the LLM vendor and for Stigg, both in-process.
-  const { vendorMock, stiggMock } = await startMocksAndGovernance(vendorApiKey, env, demoEnv);
+  const { vendorMock, stiggMock } = await startMocks(vendorApiKey, env);
 
   // 1. One SDK per environment. A key talks to the configured Stigg; a mock needs none.
   const stigg = stiggMock
     ? new StiggAgentSDK({ baseUrl: stiggMock.baseUrl })
     : new StiggAgentSDK({ apiKey: requireKey(env), baseUrl: env.baseUrl });
+  // The account's own setup, created if missing: the currency, the entity types, the demo plan a
+  // new customer is provisioned onto, and the parent team. Not the agent - that is this
+  // application's to provision, below.
+  await prepareDemo(env, demoEnv, stigg, stiggMock, {
+    agents: [],
+    teamLimit: AGENT_BUDGET * 2,
+    log: (line) => console.log(`[setup]${line}`),
+  });
 
   // The agent this chat spends as. Unset AGENT_SDK_DEMO_AGENT_ID (or the agent type) and there is
   // no agent at all: the turns are checked against the customer's own pool instead.
@@ -120,6 +116,8 @@ export async function runChat(vendor: ChatVendor): Promise<void> {
   if (agentId && demoEnv.agentType) {
     await stigg.register({
       customerId: demoEnv.customerId,
+      // A customer Stigg does not know yet is provisioned onto the demo plan first.
+      defaultPlanId: demoEnv.planId,
       agentId,
       entityTypeId: demoEnv.agentType.entityTypeId,
       displayName: `${vendor.label} chat`,
@@ -204,6 +202,8 @@ export async function runChat(vendor: ChatVendor): Promise<void> {
       eventName: demoEnv.ingestEventName,
       usageMapper: demoEnv.entitlement ? unitsPerTokens(entitlementId(demoEnv.entitlement), 1_000) : undefined,
       ingestMode: 'sync',
+      // A new customer starts on the demo plan, provisioned by its first call.
+      defaultPlanId: demoEnv.planId,
     },
     hooks: {
       onDecision: (decision) => logAsync(`[governance] check ${decision.summary}`),

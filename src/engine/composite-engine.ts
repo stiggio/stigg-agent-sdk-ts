@@ -9,7 +9,7 @@
  * would silently trade chains for no chains, which is a worse answer, not a slower one.
  */
 import { isTransportFailure } from '../errors';
-import { GovernanceNotEnabledError } from '../errors';
+import { EngineError, GovernanceNotEnabledError } from '../errors';
 import type { Logger } from '../logger';
 import type {
   EngineCapabilities,
@@ -22,6 +22,7 @@ import type {
   EntityInput,
   EntityPlacement,
   GovernanceEngine,
+  ProvisionOutcome,
 } from './engine';
 
 export type CompositeDelegates = {
@@ -35,6 +36,11 @@ export type CompositeDelegates = {
   unattributedCheck?: GovernanceEngine;
   report: GovernanceEngine;
   archiveEntity?: GovernanceEngine;
+  /**
+   * Creates customers on their default plan. The Node SDK, so the plan it answers with lands in
+   * the cache the next check reads. A customer API, so it needs no governance.
+   */
+  provisionCustomer?: GovernanceEngine;
 };
 
 /**
@@ -107,6 +113,16 @@ export class CompositeEngine implements GovernanceEngine {
 
   async archiveEntity(customerId: string, entityId: string): Promise<void> {
     await this.run('archiveEntity', this.provisioner(), (engine) => engine.archiveEntity(customerId, entityId));
+  }
+
+  async provisionCustomer(customerId: string, planId: string): Promise<ProvisionOutcome> {
+    const delegate = this.delegates.provisionCustomer;
+    if (!delegate?.provisionCustomer) {
+      throw new EngineError('provisionCustomer', 'no client here can create customers.');
+    }
+    // Not through `run()`: its fallback is REST, which does not provision customers, so there is
+    // nothing to re-route to - an unreachable Node SDK fails here and the call's own check decides.
+    return delegate.provisionCustomer(customerId, planId);
   }
 
   async check(customerId: string, params: EngineCheckParams): Promise<EngineCheckResult> {

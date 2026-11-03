@@ -12,6 +12,7 @@ import { describe, it } from 'node:test';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { join } from 'node:path';
+import { EXAMPLE_ENV } from './pinned-demo-env';
 
 const run = promisify(execFile);
 const PACKAGE_ROOT = join(__dirname, '..');
@@ -20,7 +21,7 @@ const runExample = async (file: string): Promise<string> => {
   const { stdout } = await run('yarn', ['tsx', file], {
     cwd: PACKAGE_ROOT,
     // Forced, so the test never depends on whichever keys are in the developer's .env.
-    env: { ...process.env, AGENT_SDK_OFFLINE: '1' },
+    env: { ...process.env, ...EXAMPLE_ENV },
     timeout: 120_000,
   });
   return stdout;
