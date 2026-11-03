@@ -14,7 +14,9 @@ versions below track what this repository holds rather than what npm publishes.
   `generateText`, `streamText` or an agent's loop is checked before it runs and reported after, as
   the agent in the middleware's `stiggContext`; a call names its customer in
   `providerOptions.stigg`, which is taken out before the provider sees the call. A stream is
-  reported once, when it ends. See `docs/vercel-ai.md`, and
+  reported once, when it ends. A stream the caller stops is estimated and is not a metering
+  failure; a timeout, a failed stream, or a model that states no usage - streamed or not - is
+  estimated and counted as one. See `docs/vercel-ai.md`, and
   `yarn example-orchestrator-vercel-ai-handoff` for a lead, researcher and writer whose refused
   researcher falls back to a generalist.
 - Orchestrator governance for LangChain and LangGraph: `StiggLangChainCallbackHandler` from the new

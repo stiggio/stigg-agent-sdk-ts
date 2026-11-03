@@ -37,6 +37,19 @@ __metadata:
   languageName: node
   linkType: hard
 
+"@ai-sdk/gateway@npm:3.0.226":
+  version: 3.0.226
+  resolution: "@ai-sdk/gateway@npm:3.0.226"
+  dependencies:
+    "@ai-sdk/provider": "npm:3.0.19"
+    "@ai-sdk/provider-utils": "npm:4.0.63"
+    "@vercel/oidc": "npm:3.2.0"
+  peerDependencies:
+    zod: ^3.25.76 || ^4.1.8
+  checksum: 10c0/2acf4d43ac3e10a2cc14a34ad03c9a861996116b06852514ebb7d6d49e74c1c47eadf5c44e6e872423e5c81bcc12f07431923eaa6f2caf71d59c8a41d407e30c
+  languageName: node
+  linkType: hard
+
 "@ai-sdk/gateway@npm:4.0.132":
   version: 4.0.132
   resolution: "@ai-sdk/gateway@npm:4.0.132"
@@ -47,6 +60,20 @@ __metadata:
   peerDependencies:
     zod: ^3.25.76 || ^4.1.8
   checksum: 10c0/d741575e89c6b4c514ce43e166de77066d1b514e9edd9c0921c7355730448854e9c9472a765a0c8a016608286d23efee46fa7de70a9595d659fd53f011ced848
+  languageName: node
+  linkType: hard
+
+"@ai-sdk/provider-utils@npm:4.0.63":
+  version: 4.0.63
+  resolution: "@ai-sdk/provider-utils@npm:4.0.63"
+  dependencies:
+    "@ai-sdk/provider": "npm:3.0.19"
+    "@standard-schema/spec": "npm:^1.1.0"
+    eventsource-parser: "npm:^3.0.8"
+    undici: "npm:^6.28.0"
+  peerDependencies:
+    zod: ^3.25.76 || ^4.1.8
+  checksum: 10c0/6e2fe6f513c065815ca17e370dca600543eb1b11fd13709f3df184a60f3938e2b98b3762a7ed931a9ab2870fc25e27d58bbd55c5b487594110de81fb67903f28
   languageName: node
   linkType: hard
 
@@ -62,6 +89,15 @@ __metadata:
   peerDependencies:
     zod: ^3.25.76 || ^4.1.8
   checksum: 10c0/d040d164c9ee8bcd75796851022ed781d94aea29ad9160325a8e0a8a20e1357c43ca172b476144c8fc29fa6b5f22bc6bf14480dfcf78a7c6336eb44e58589ca6
+  languageName: node
+  linkType: hard
+
+"@ai-sdk/provider@npm:3.0.19":
+  version: 3.0.19
+  resolution: "@ai-sdk/provider@npm:3.0.19"
+  dependencies:
+    json-schema: "npm:^0.4.0"
+  checksum: 10c0/f77fcae35b7e388704a2594d59eb2d89bb2311c1b8c794937bcb2dfcd566fc83a870bbe0e03d96349539e465e69cce29ce9b3cdf32b708304a09830c0a459ea5
   languageName: node
   linkType: hard
 
@@ -1935,6 +1971,7 @@ __metadata:
     "@types/node": "npm:^22.18.0"
     "@typesafe-ai/sdk": "npm:^0.6.0"
     ai: "npm:^7.0.153"
+    ai-v6: "npm:ai@^6.0.320"
     cloudflare: "npm:^7.3.0"
     dotenv: "npm:^17.4.2"
     eslint: "npm:^10.0.0"
@@ -2438,6 +2475,20 @@ __metadata:
   version: 7.1.4
   resolution: "agent-base@npm:7.1.4"
   checksum: 10c0/c2c9ab7599692d594b6a161559ada307b7a624fa4c7b03e3afdb5a5e31cd0e53269115b620fcab024c5ac6a6f37fa5eb2e004f076ad30f5f7e6b8b671f7b35fe
+  languageName: node
+  linkType: hard
+
+"ai-v6@npm:ai@^6.0.320":
+  version: 6.0.320
+  resolution: "ai@npm:6.0.320"
+  dependencies:
+    "@ai-sdk/gateway": "npm:3.0.226"
+    "@ai-sdk/provider": "npm:3.0.19"
+    "@ai-sdk/provider-utils": "npm:4.0.63"
+    "@opentelemetry/api": "npm:^1.9.0"
+  peerDependencies:
+    zod: ^3.25.76 || ^4.1.8
+  checksum: 10c0/663c93d23cd0702f5232215d432258510179545cbe65882dfbb1242a1cd843cfb59c5a01437e993027f43dfdb56fa4e9c0914c401b6edb2f72728226575b31ca
   languageName: node
   linkType: hard
 
@@ -5447,6 +5498,13 @@ __metadata:
   version: 8.9.0
   resolution: "undici-types@npm:8.9.0"
   checksum: 10c0/51c712c20c087368f62c6fc0f2bc49fa76bfe5dec28ff01584bb677ff29b0622569783c02d43e151143808c48c0503f804093bd2c491b10f2a830138034cb451
+  languageName: node
+  linkType: hard
+
+"undici@npm:^6.28.0":
+  version: 6.29.1
+  resolution: "undici@npm:6.29.1"
+  checksum: 10c0/2d6970289fcbaca69a484e968fbb5e6fdadf7d9bff30bb5476f71b619d143ec76df1c75a309ac3cb3b3d78238793c613dcaad47dc9d92b63f9e8e73b86ffec23
   languageName: node
   linkType: hard
 

@@ -120,11 +120,21 @@ A refusal is `AccessDeniedError`, thrown from the refused model call.
 
 A streamed call is metered once, when the stream ends, from the usage the provider states on its
 last part. A stream **stopped early** with an `abortSignal` - a user pressing stop - is reported by
-an estimate of the output it produced (about 4 characters a token), marked `estimated` and
-`incomplete`: its input tokens are not known. A stream your code simply stops reading, with no
-`abortSignal`, is not reported. Pass the request's signal to `streamText()`. A stop that lands after
-the model finished but before your code read its last part is estimated too, so it can come in a
-little under what the provider billed.
+an estimate of the output it produced (about 4 characters a token), marked `estimated`: its input
+tokens are not known. A stop is normal, so it is not counted as a metering failure - unless the
+model had answered but produced no output yet, when there is nothing to estimate. A stop before the
+model answered at all reports nothing. A stop that lands after the model finished but before your
+code read its last part is estimated too, so it can come in a little under what the provider counted.
+
+A **timeout** - the AI SDK's `timeout`, or an `AbortSignal.timeout()` of your own - aborts the same
+signal, and is counted as a metering failure, as is a stream that fails partway.
+
+**Pass the request's `abortSignal` to `streamText()`.** A stream your code simply stops reading -
+a `break` out of `for await` - with no `abortSignal` is not reported at all.
+
+A model that states **no usage** at all - an OpenAI-compatible server without `include_usage`, say -
+is estimated the same way, streamed or not, and counted as a metering failure (`onError`,
+`summary().ingestFailures`): the meter is running on a guess.
 
 An attempt that failed before producing anything - one the AI SDK retries - reports nothing.
 
@@ -152,6 +162,9 @@ A cached answer that never reaches the model is then neither checked nor reporte
 guardrails block costs nothing.
 
 A `prepareStep` that returns `providerOptions` is merged into the call's (`ai` 7), so `stigg` stays.
+Leave `stigg` out of what it returns: set it there and every step gets a new `stigg` object, so a
+step is no longer checked after the last streamed step's report lands - it can spend a little past
+the budget.
 A `prepareStep` that returns a different `model` runs that step on it: wrap that one too, or the step
 is not governed.
 

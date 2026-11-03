@@ -14,7 +14,7 @@ import type { StiggAgentSDK } from '../../../stigg-agent-sdk';
 import type { StiggContext } from '../../../core/context';
 import type { SessionHooks } from '../../../core/session';
 import type { ClientContext, GovernedAgentMiddleware, Measurement } from '../../../types';
-import { estimated, measurementOf, type ModelUsage } from './usage';
+import { NO_USAGE, contentChars, estimated, measurementOf, type ModelUsage } from './usage';
 
 export { VERCEL_AI_METRICS, measurementOf } from './usage';
 export type { VercelAIMetric, VercelAIMetrics } from './usage';
@@ -104,9 +104,14 @@ export function stiggVercelMiddleware({
         governance.abandon(runId);
         throw err;
       }
-      // Awaited, so the agent's next step is checked against this one's spend. Never throws; no
-      // usage at all is reported as a metering failure.
-      await governance.endModel(runId, measurementOf(result?.usage, result?.response?.id));
+      // Awaited, so the agent's next step is checked against this one's spend. Never throws. No
+      // usage stated: estimated from the reply, as a stream is, and counted as a metering failure.
+      const responseId = result?.response?.id;
+      const chars = contentChars(result?.content);
+      await governance.endModel(
+        runId,
+        measurementOf(result?.usage, responseId) ?? (chars ? estimated(chars, NO_USAGE, responseId) : undefined),
+      );
       return result;
     },
 
@@ -138,6 +143,29 @@ export function stiggVercelMiddleware({
 
 type StreamPart = { type?: string; id?: string; delta?: unknown; usage?: ModelUsage };
 
+/** How a stream ended. Only `stopped` - the caller's own stop - is not a gap in metering. */
+type StreamEnd = 'ended' | 'failed' | 'timedOut' | 'stopped';
+
+/** What `incomplete` says for a stream that ended without its usage, by how it ended. */
+const STREAM_GAPS: Record<StreamEnd, string> = {
+  ended: NO_USAGE,
+  failed: 'the stream failed before the model stated its usage, so its output was estimated',
+  timedOut: 'the call timed out before the model stated its usage, so its output was estimated',
+  stopped: 'the call was stopped before any output, so its input was not measured',
+};
+
+/** A timeout's abort is not the caller stopping. */
+const isTimeout = (reason: unknown) => (reason as Error | undefined)?.name === 'TimeoutError';
+
+/**
+ * Why a reader cancelled: the AI SDK cancels an attempt it retries with the provider's error, which
+ * is a failure; any other reason is the caller stopping.
+ */
+function cancelEnd(reason: unknown): StreamEnd {
+  if (isTimeout(reason)) return 'timedOut';
+  return reason instanceof Error && reason.name !== 'AbortError' ? 'failed' : 'stopped';
+}
+
 /** What a stream has told us so far. */
 function streamTally() {
   let usage: ModelUsage | undefined;
@@ -150,12 +178,17 @@ function streamTally() {
       else if (part?.type === 'response-metadata' && typeof part.id === 'string') responseId = part.id;
       else if (typeof part?.delta === 'string') chars += part.delta.length;
     },
-    /** The usage the model stated; else an estimate; else nothing, for an attempt that produced nothing. */
-    measurement(): Measurement | undefined {
+    /**
+     * The usage the model stated; else an estimate; else nothing, for an attempt that produced
+     * nothing. A stream the caller stopped is estimated without counting as a metering failure -
+     * unless there was nothing to estimate, while the provider still counted its input.
+     */
+    measurement(end: StreamEnd): Measurement | undefined {
       const measured = measurementOf(usage, responseId);
       if (measured) return measured;
       if (chars === 0 && responseId === undefined) return undefined;
-      return estimated(chars);
+      const gap = end === 'stopped' && chars > 0 ? undefined : STREAM_GAPS[end];
+      return estimated(chars, gap, responseId);
     },
   };
 }
@@ -178,26 +211,27 @@ export function observeStream(
 
   const tally = streamTally();
   let reported = false;
-  const report = () => {
+  const report = (end: StreamEnd) => {
     if (reported) return;
     reported = true;
     // Every step of a loop shares the signal, which may live as long as the process.
-    signal?.removeEventListener('abort', report);
-    done(tally.measurement());
+    signal?.removeEventListener('abort', onAbort);
+    done(tally.measurement(end));
   };
-  signal?.addEventListener('abort', report, { once: true });
-  if (signal?.aborted) report();
+  const onAbort = () => report(isTimeout(signal?.reason) ? 'timedOut' : 'stopped');
+  signal?.addEventListener('abort', onAbort, { once: true });
+  if (signal?.aborted) onAbort();
 
   // A source of its own rather than a TransformStream, whose flush never runs on a cancel.
   const reader = source.getReader();
   result.stream = new ReadableStream<StreamPart>({
     async pull(controller) {
       const next = await reader.read().catch((err: unknown) => {
-        report();
+        report('failed');
         throw err;
       });
       if (next.done) {
-        report();
+        report('ended');
         controller.close();
         return;
       }
@@ -205,7 +239,7 @@ export function observeStream(
       controller.enqueue(next.value);
     },
     async cancel(reason) {
-      report();
+      report(cancelEnd(reason));
       await reader.cancel(reason);
     },
   });

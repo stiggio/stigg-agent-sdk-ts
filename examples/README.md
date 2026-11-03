@@ -4,7 +4,7 @@ What each one *demonstrates*, and how to run it, is [section 6 of the package
 README](../docs/guide.md#6-run-the-examples). This file answers the question that one does not:
 standing in this folder, which of these files is a thing you run?
 
-Twenty-two are. Everything else is imported by them.
+Twenty-three are. Everything else is imported by them.
 
 ## Runnable
 

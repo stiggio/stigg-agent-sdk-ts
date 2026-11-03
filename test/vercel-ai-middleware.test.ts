@@ -43,10 +43,11 @@ async function setup(budgets: { lead?: number; researcher?: number } = {}) {
   const ingests: HookContext[] = [];
   const results: IngestResult[] = [];
   const base = createAnthropic({ apiKey: 'offline-mock', baseURL: `${vendor.baseUrl}/v1` })('claude-opus-5');
+  const middlewares: ReturnType<typeof stiggVercelMiddleware>[] = [];
   const model = (agentId: string, customerId?: string) =>
     wrapLanguageModel({
       model: base,
-      middleware: stiggVercelMiddleware({
+      middleware: governed(middlewares, {
         stigg,
         stiggContext: { agentId, attributionKey: 'agentId', entitlement: credits, ingestMode: 'sync', customerId },
         hooks: {
@@ -59,7 +60,20 @@ async function setup(budgets: { lead?: number; researcher?: number } = {}) {
     });
   /** Who each call was reported for: agent and customer. */
   const reported = () => ingests.map((c) => `${c.dimensions.agentId}@${c.customerId}`);
-  return { stigg, base, model, reported, results };
+  /** How many calls were not fully measured, across every middleware made here. */
+  const ingestFailures = async () =>
+    (await Promise.all(middlewares.map((m) => m.stigg.flush()))).reduce((n, s) => n + s.ingestFailures, 0);
+  return { stigg, base, model, reported, results, ingestFailures };
+}
+
+/** A middleware, kept so its summary can be read. */
+function governed(
+  kept: ReturnType<typeof stiggVercelMiddleware>[],
+  ...options: Parameters<typeof stiggVercelMiddleware>
+) {
+  const middleware = stiggVercelMiddleware(...options);
+  kept.push(middleware);
+  return middleware;
 }
 
 describe('stiggVercelMiddleware - a model wrapped by wrapLanguageModel', () => {
@@ -100,18 +114,16 @@ describe('stiggVercelMiddleware - a model wrapped by wrapLanguageModel', () => {
     assert.deepEqual(reported(), []);
   });
 
-  it('rejects the call when the agent is out of budget', async () => {
-    const { model } = await setup({ lead: 0 });
+  it('rejects the call when the agent is out of budget, before the model is called', async () => {
+    const { model, calls } = await governedFake({ agentId: 'agent-lead', attributionKey: 'agentId' }, 'v4', {
+      lead: 0,
+    });
 
     await assert.rejects(
-      generateText({
-        model: model('agent-lead'),
-        prompt: 'hi',
-        maxRetries: 0,
-        providerOptions: { stigg: { customerId: CUSTOMER } },
-      }),
+      generateText({ model, prompt: 'hi', maxRetries: 0, providerOptions: { stigg: { customerId: CUSTOMER } } }),
       (err) => err instanceof AccessDeniedError,
     );
+    assert.equal(calls.length, 0);
   });
 
   it('hands a refused sub-agent back to the lead as a failed tool call, and the lead goes on', async () => {
@@ -177,8 +189,8 @@ describe('stiggVercelMiddleware - a model wrapped by wrapLanguageModel', () => {
     assert.ok(errors[0] instanceof AccessDeniedError);
   });
 
-  it('reports a stream stopped by its abortSignal, by the text it produced', async () => {
-    const { stigg, model, reported } = await setup();
+  it('reports a stream stopped by its abortSignal, by the text it produced, and not as a failure', async () => {
+    const { stigg, model, reported, ingestFailures } = await setup();
 
     const stop = new AbortController();
     const stream = streamText({
@@ -192,6 +204,57 @@ describe('stiggVercelMiddleware - a model wrapped by wrapLanguageModel', () => {
     await stigg.flush();
 
     assert.deepEqual(reported(), [`agent-lead@${CUSTOMER}`]);
+    assert.equal(await ingestFailures(), 0);
+  });
+
+  /** A stream that answers, says a word, and then hangs: what a stop or a chunk timeout ends. */
+  function stallingModel() {
+    const { model } = fakeModel();
+    return {
+      ...model,
+      doStream: async () => ({
+        stream: new ReadableStream({
+          start(controller) {
+            controller.enqueue({ type: 'stream-start', warnings: [] });
+            controller.enqueue({ type: 'response-metadata', id: 'resp_stall' });
+            controller.enqueue({ type: 'text-start', id: 't' });
+            controller.enqueue({ type: 'text-delta', id: 't', delta: '12345678' });
+          },
+        }),
+      }),
+    };
+  }
+
+  async function stalled(options: { timeout?: { chunkMs: number }; stopAfterFirstChunk?: boolean }) {
+    const { stigg } = await setup();
+    const middleware = stiggVercelMiddleware({
+      stigg,
+      stiggContext: { customerId: CUSTOMER, entitlement: credits, ingestMode: 'sync' },
+    });
+    const stop = new AbortController();
+    const stream = streamText({
+      model: wrapLanguageModel({ model: stallingModel() as never, middleware }),
+      prompt: 'hi',
+      abortSignal: stop.signal,
+      ...(options.timeout ? { timeout: options.timeout } : {}),
+      onError: () => undefined,
+    });
+    for await (const chunk of stream.textStream) if (chunk && options.stopAfterFirstChunk) stop.abort();
+    return middleware.stigg.flush();
+  }
+
+  it("counts the AI SDK's own chunk timeout as a metering failure", async () => {
+    const summary = await stalled({ timeout: { chunkMs: 50 } });
+
+    assert.equal(summary.ingested, 1, 'what it produced is still reported');
+    assert.equal(summary.ingestFailures, 1);
+  });
+
+  it('does not count a stop on the same stream as a metering failure', async () => {
+    const summary = await stalled({ stopAfterFirstChunk: true });
+
+    assert.equal(summary.ingested, 1);
+    assert.equal(summary.ingestFailures, 0);
   });
 });
 
@@ -306,7 +369,66 @@ describe('the stream reader', () => {
     assert.equal(ingested.length, 1);
     assert.deepEqual(ingested[0]?.metrics, { output_tokens: 2, total_tokens: 2 });
     assert.equal(ingested[0]?.estimated, true);
+    assert.equal(ingested[0]?.incomplete, undefined, 'a stop is not a metering failure');
+  });
+
+  it('counts a stream its timeout stopped as a metering failure, unlike a stop', async () => {
+    const stop = new AbortController();
+    const { reader, ingested } = observe([TEXT('12345678'), TEXT('9')], { abortSignal: stop.signal });
+    await reader.read();
+    stop.abort(new DOMException('timed out', 'TimeoutError'));
+
+    assert.equal(ingested[0]?.estimated, true);
+    assert.match(ingested[0]?.incomplete ?? '', /timed out/);
+  });
+
+  it('counts a stop with nothing to estimate as a metering failure: the input was still counted', async () => {
+    const stop = new AbortController();
+    const { reader, ingested } = observe([{ type: 'response-metadata', id: 'msg_1' }, TEXT('late')], {
+      abortSignal: stop.signal,
+    });
+    await reader.read();
+    stop.abort();
+
+    assert.deepEqual(ingested[0]?.metrics, {});
     assert.ok(ingested[0]?.incomplete);
+  });
+
+  it('counts an attempt the AI SDK cancels to retry, with the provider error, as a metering failure', async () => {
+    const { reader, ingested } = observe([TEXT('12345')]);
+    await reader.read();
+    await reader.cancel(new Error('overloaded'));
+
+    assert.equal(ingested[0]?.estimated, true);
+    assert.match(ingested[0]?.incomplete ?? '', /failed/);
+  });
+
+  it('counts a cancel after the model answered but before any text as a metering failure', async () => {
+    const { reader, ingested } = observe([{ type: 'response-metadata', id: 'msg_1' }, TEXT('late')]);
+    await reader.read();
+    await reader.cancel();
+
+    assert.deepEqual(ingested[0]?.metrics, {});
+    assert.match(ingested[0]?.incomplete ?? '', /stopped before any output/);
+    assert.equal(ingested[0]?.idempotencyKey, 'msg_1');
+  });
+
+  it("treats an abort with the caller's own error as a stop", async () => {
+    const stop = new AbortController();
+    const { reader, ingested } = observe([TEXT('12345678'), TEXT('9')], { abortSignal: stop.signal });
+    await reader.read();
+    stop.abort(new Error('x'));
+
+    assert.equal(ingested[0]?.incomplete, undefined);
+  });
+
+  it('reports nothing for a signal that had already timed out, when nothing was produced', () => {
+    const { ingested, ended } = observe([TEXT('late')], {
+      abortSignal: AbortSignal.abort(new DOMException('timed out', 'TimeoutError')),
+    });
+
+    assert.deepEqual(ingested, []);
+    assert.equal(ended(), 1);
   });
 
   it('lets go of the abortSignal once the stream has ended', async () => {
@@ -336,6 +458,7 @@ describe('the stream reader', () => {
 
     assert.equal(ingested.length, 1);
     assert.equal(ingested[0]?.estimated, true);
+    assert.equal(ingested[0]?.incomplete, undefined, 'a stop is not a metering failure');
     assert.deepEqual(cancelled, ['user stopped']);
   });
 
@@ -346,6 +469,7 @@ describe('the stream reader', () => {
     await assert.rejects(reader.read(), /connection reset/);
     assert.equal(ingested.length, 1);
     assert.equal(ingested[0]?.estimated, true);
+    assert.ok(ingested[0]?.incomplete, 'a failed stream is a metering gap');
   });
 
   it('estimates when the finish part states no usage', async () => {
@@ -353,6 +477,7 @@ describe('the stream reader', () => {
     while (!(await reader.read()).done);
 
     assert.equal(ingested[0]?.estimated, true);
+    assert.ok(ingested[0]?.incomplete, 'a model that states no usage is a metering gap');
   });
 
   it('reports nothing for a stream that produced nothing and named no response', async () => {
@@ -398,8 +523,12 @@ function fakeModel(specificationVersion = 'v4') {
 }
 
 /** `fakeModel()` behind the middleware, its calls checked against the given context. */
-async function governedFake(stiggContext: object, specificationVersion = 'v4') {
-  const { stigg, results } = await setup();
+async function governedFake(
+  stiggContext: object,
+  specificationVersion = 'v4',
+  budgets: Parameters<typeof setup>[0] = {},
+) {
+  const { stigg, results } = await setup(budgets);
   const fake = fakeModel(specificationVersion);
   const model = wrapLanguageModel({
     model: fake.model as never,
@@ -409,7 +538,7 @@ async function governedFake(stiggContext: object, specificationVersion = 'v4') {
       hooks: { onIngest: (result) => results.push(result) },
     }),
   });
-  return { stigg, results, model, calls: fake.calls };
+  return { stigg, results, model, calls: fake.calls, fake };
 }
 
 describe('the per-call context', () => {
@@ -569,9 +698,13 @@ describe('the per-call context', () => {
   });
 
   it('treats a null stigg as no context of its own', async () => {
-    const { model } = await governedFake({ customerId: CUSTOMER });
+    const { model, calls, results, stigg } = await governedFake({ customerId: CUSTOMER });
 
     await generateText({ model, prompt: 'hi', providerOptions: { stigg: null as never } });
+    await stigg.flush();
+
+    assert.deepEqual(calls[0]?.providerOptions, {}, 'still taken out before the provider');
+    assert.equal(results.length, 1, "metered for the middleware's customer");
   });
 
   it('refuses an idempotencyKey in providerOptions.stigg, which every step of a loop would share', async () => {
@@ -594,7 +727,83 @@ describe('the per-call context', () => {
 
     await assert.rejects(
       generateText({ model, prompt: 'hi', maxRetries: 0, providerOptions: { stigg: { custmerId: CUSTOMER } } }),
+      /custmerId/,
     );
     assert.equal(calls.length, 0);
+  });
+});
+
+describe('a model that states no usage, or fails', () => {
+  /** The fake model behind the middleware, its reply's usage replaced. */
+  async function noUsage(content: unknown[]) {
+    const { stigg, results } = await setup();
+    const fake = fakeModel();
+    const model = {
+      ...fake.model,
+      doGenerate: async (options: object) => ({
+        ...(await fake.model.doGenerate(options)),
+        content,
+        usage: { inputTokens: {}, outputTokens: {} },
+      }),
+    };
+    const middleware = stiggVercelMiddleware({
+      stigg,
+      stiggContext: { customerId: CUSTOMER, entitlement: credits, ingestMode: 'sync' },
+      hooks: { onIngest: (result) => results.push(result) },
+    });
+    return { middleware, results, model: wrapLanguageModel({ model: model as never, middleware }) };
+  }
+
+  it('estimates a generated reply, as a stream is, and counts it as a metering failure', async () => {
+    const { middleware, model, results } = await noUsage([{ type: 'text', text: '12345678' }]);
+
+    await generateText({ model, prompt: 'hi' });
+    const summary = await middleware.stigg.flush();
+
+    assert.equal(summary.ingested, 1);
+    assert.equal(summary.ingestFailures, 1);
+    assert.equal(results[0]?.reported.output_tokens, 2, '8 characters');
+    assert.match(results[0]?.idempotencyKey ?? '', /resp_1/, 'keyed by the response, so a replay is one report');
+  });
+
+  it('estimates a reply of reasoning and a tool call from both', async () => {
+    const { model, results } = await noUsage([
+      { type: 'reasoning', text: 'abcdefgh' },
+      { type: 'tool-call', toolCallId: 'c1', toolName: 'search', input: '{"q":"ab"}' },
+    ]);
+
+    await generateText({ model, prompt: 'hi' });
+
+    assert.equal(results[0]?.reported.output_tokens, 5, '8 + 10 characters');
+  });
+
+  it('meters nothing for a reply with no usage and no text, and counts it as a metering failure', async () => {
+    const { middleware, model } = await noUsage([]);
+
+    await generateText({ model, prompt: 'hi' });
+    const summary = await middleware.stigg.flush();
+
+    assert.equal(summary.ingested, 0);
+    assert.equal(summary.ingestFailures, 1);
+  });
+
+  it('lets go of a step whose model throws, and passes the error on', async () => {
+    const abandoned: string[] = [];
+    const fake = {
+      middleware: () => ({
+        stigg: {},
+        startModel: async () => undefined,
+        endModel: async () => assert.fail('a failed call is not reported'),
+        abandon: (runId: string) => void abandoned.push(runId),
+      }),
+    };
+    const middleware = stiggVercelMiddleware({ stigg: fake as never });
+    const fail = async () => {
+      throw new Error('overloaded');
+    };
+
+    await assert.rejects(middleware.wrapGenerate({ doGenerate: fail, params: {} }), /overloaded/);
+    await assert.rejects(middleware.wrapStream({ doStream: fail, params: {} }), /overloaded/);
+    assert.equal(abandoned.length, 2);
   });
 });
