@@ -148,8 +148,6 @@ closed, and conflating them is how an outage takes an application down.
 | <img src="https://raw.githubusercontent.com/stiggio/stigg-agent-sdk-ts/main/docs/logos/gemini.svg" width="18" alt=""> | Gemini | <img src="https://raw.githubusercontent.com/stiggio/stigg-agent-sdk-ts/main/docs/logos/typesafe.png" width="18" alt=""> | TypeSafe |
 | <img src="https://raw.githubusercontent.com/stiggio/stigg-agent-sdk-ts/main/docs/logos/groq.svg" width="18" alt=""> | Groq | | |
 
-**Frameworks** — [Vercel AI SDK](docs/vercel-ai.md): any model it runs, through `generateText`, `streamText` and agents. Model calls only, for now.
-
 **Gateways** — what was actually *charged*, and which model actually served after routing:
 
 | | Gateway | | Gateway |
@@ -163,7 +161,8 @@ closed, and conflating them is how an outage takes an application down.
 | | Orchestrator | | Orchestrator |
 | --- | --- | --- | --- |
 | <img src="https://raw.githubusercontent.com/stiggio/stigg-agent-sdk-ts/main/docs/logos/langchain.svg" width="18" alt=""> | [LangChain](docs/langchain.md) | <img src="https://raw.githubusercontent.com/stiggio/stigg-agent-sdk-ts/main/docs/logos/langgraph.svg" width="18" alt=""> | [LangGraph](docs/langchain.md#a-hand-built-langgraph) |
-| <img src="https://raw.githubusercontent.com/stiggio/stigg-agent-sdk-ts/main/docs/logos/google-adk.png" width="18" alt=""> | [Google ADK](docs/guide.md#google-adk-one-plugin-per-runner) | | Your own harness, through `stigg.middleware()` |
+| <img src="https://raw.githubusercontent.com/stiggio/stigg-agent-sdk-ts/main/docs/logos/google-adk.png" width="18" alt=""> | [Google ADK](docs/guide.md#google-adk-one-plugin-per-runner) | <img src="https://raw.githubusercontent.com/stiggio/stigg-agent-sdk-ts/main/docs/logos/vercel.svg" width="18" alt=""> | [Vercel AI SDK](docs/vercel-ai.md) (model calls, for now) |
+| | Your own harness, through `stigg.middleware()` | | |
 
 Each binding is written against the *shape a vendor returns*, not against its SDK — so installing
 this package pulls in **no vendor packages at all**, and you install only the one you use.
