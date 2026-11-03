@@ -122,6 +122,7 @@
         "example-orchestrator-langgraph-model-fallback",
         "example-orchestrator-adk-handoff",
         "example-orchestrator-adk-model-fallback",
+        "example-orchestrator-vercel-ai-handoff",
         "example-setup",
         "example-two-agents"
       ],

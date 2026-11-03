@@ -9,6 +9,16 @@ versions below track what this repository holds rather than what npm publishes.
 
 ### Added
 
+- Orchestrator governance for the Vercel AI SDK (`ai` 6 and 7): `stiggVercelMiddleware()`, a
+  language model middleware for the AI SDK's own `wrapLanguageModel`. Each model call of
+  `generateText`, `streamText` or an agent's loop is checked before it runs and reported after, as
+  the agent in the middleware's `stiggContext`; a call names its customer in
+  `providerOptions.stigg`, which is taken out before the provider sees the call. A stream is
+  reported once, when it ends. A stream the caller stops is estimated and is not a metering
+  failure; a timeout, a failed stream, or a model that states no usage - streamed or not - is
+  estimated and counted as one. See `docs/vercel-ai.md`, and
+  `yarn example-orchestrator-vercel-ai-handoff` for a lead, researcher and writer whose refused
+  researcher falls back to a generalist.
 - Orchestrator governance for LangChain and LangGraph: `StiggLangChainCallbackHandler` from the new
   `@stigg/agent-sdk-js/langchain` entry, over the framework-neutral `stigg.middleware(...)`. One
   handler per graph checks each step and reports its usage as the agent that took it, governs

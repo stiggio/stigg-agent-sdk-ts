@@ -65,6 +65,7 @@ const PUBLIC = [
   'toMeasurement',
   'typesafeRecipe',
   'vendorMetrics',
+  'stiggVercelMiddleware',
   'weightedMetrics',
   'wrapClient',
   'cloudflareRecipe',

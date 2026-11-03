@@ -403,6 +403,8 @@ export function createAgentMiddleware(session: GovernanceSession, config: AgentM
         return;
       }
       await session.ingestMeasurement(step.context, measurement);
+      // Reported what it could, and said what it could not - as a gated client call does.
+      if (measurement.incomplete) session.failedToMeasure(step.context, new Error(measurement.incomplete));
     },
 
     async startTool(runId, { name, callId, kind, input }, attribution) {

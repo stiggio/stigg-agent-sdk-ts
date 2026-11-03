@@ -148,6 +148,8 @@ closed, and conflating them is how an outage takes an application down.
 | <img src="https://raw.githubusercontent.com/stiggio/stigg-agent-sdk-ts/main/docs/logos/gemini.svg" width="18" alt=""> | Gemini | <img src="https://raw.githubusercontent.com/stiggio/stigg-agent-sdk-ts/main/docs/logos/typesafe.png" width="18" alt=""> | TypeSafe |
 | <img src="https://raw.githubusercontent.com/stiggio/stigg-agent-sdk-ts/main/docs/logos/groq.svg" width="18" alt=""> | Groq | | |
 
+**Frameworks** — [Vercel AI SDK](docs/vercel-ai.md): any model it runs, through `generateText`, `streamText` and agents. Model calls only, for now.
+
 **Gateways** — what was actually *charged*, and which model actually served after routing:
 
 | | Gateway | | Gateway |
@@ -181,6 +183,7 @@ rather than handing back a client that quietly meters nothing.
 | Meter a gateway you operate | `client.stigg.headers()` out, `stigg.ingestFromHeaders(...)` back |
 | Govern a LangChain / LangGraph agent graph ([guide](docs/langchain.md)) | `new StiggLangChainCallbackHandler({ stigg, agents, tools })` from `@stigg/agent-sdk-js/langchain` |
 | Govern a Google ADK agent graph ([guide](docs/guide.md#google-adk-one-plugin-per-runner)) | `new StiggAdkPlugin({ stigg, agents, tools, stepContext })` from `@stigg/agent-sdk-js/adk`, in the Runner's `plugins` |
+| Govern a Vercel AI SDK model or agent ([guide](docs/vercel-ai.md)) | `wrapLanguageModel({ model, middleware: stiggVercelMiddleware({ stigg, stiggContext }) })`, a call's own in `providerOptions.stigg` |
 | Govern a graph from your own harness | `stigg.middleware({ stiggContext, agents })` |
 
 One wrapped client serves every customer and every agent: the context is an argument, given once at
