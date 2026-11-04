@@ -9,6 +9,13 @@ versions below track what this repository holds rather than what npm publishes.
 
 ### Added
 
+- Paid tools on the Vercel AI SDK: `stiggVercelMiddleware({ tools })` takes the LangChain binding's
+  `tools` config, and `middleware.tools(...)` wraps each governed tool's `execute` - checked before
+  it runs and reported after, as `tool.<name>`, for the model step that asked for it. A refused tool
+  does not run: it fails with a message that names the tool and why, which the model reads, and
+  `stigg.denial(error)` returns the decision. An approved tool (`needsApproval`) names its customer in
+  its own context - `toolsContext` on `ai` 7, `experimental_context` on `ai` 6. See
+  `docs/vercel-ai.md`.
 - agentgateway, the open-source AI gateway, and the builds on it (Solo Enterprise for agentgateway,
   Gloo AI Gateway): `agentgatewayRecipe()`, over both of its wires - an OpenAI client pointed at the
   gateway reports `agentgateway.chat.completions.create` or `agentgateway.responses.create`, an

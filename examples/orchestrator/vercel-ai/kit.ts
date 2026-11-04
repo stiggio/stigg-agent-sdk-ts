@@ -5,7 +5,7 @@
  * `../core/chat.ts`'s.
  */
 import { createAnthropic } from '@ai-sdk/anthropic';
-import { wrapLanguageModel, type LanguageModel, type ModelMessage, type ToolLoopAgent } from 'ai';
+import { wrapLanguageModel, type LanguageModel, type ModelMessage, type ToolLoopAgent, type ToolSet } from 'ai';
 import { z } from 'zod';
 import { stiggVercelMiddleware, type SessionHooks, type StiggAgentSDK } from '../../../src';
 import { optionalEnv } from '../../client/core/vendor';
@@ -13,6 +13,9 @@ import { startGovernedChat, type ChatCast } from '../core/chat';
 import { logDone, logStart } from '../core/style';
 
 export const MODEL = process.env.AGENT_SDK_ANTHROPIC_MODEL ?? 'claude-opus-5';
+
+/** The researcher's search: a paid tool, priced per result. */
+export const SEARCH_TOOL = 'web_search';
 
 /** Who a request is for: each agent's call option, and each delegating tool's context. */
 export const Request = z.object({ customerId: z.string() });
@@ -23,6 +26,8 @@ export type VercelAIKit = {
   stigg: StiggAgentSDK;
   /** The agent's model, governed as that agent: `wrapLanguageModel` with Stigg's middleware. */
   model(agent: string): LanguageModel;
+  /** The agent's tools, its paid ones governed by the same middleware as its model. */
+  tools<T extends ToolSet>(agent: string, tools: T): T;
 };
 
 /** An agent the chat can run: a `ToolLoopAgent` whose call options are the request. */
@@ -64,17 +69,28 @@ export function startVercelAIChat(cast: ChatCast, build: (kit: VercelAIKit) => A
         ...(mock ? { baseURL: `${mock.baseUrl}/v1` } : {}),
       });
       // The chat's Stigg options, per agent: the AI SDK names no agents, so each model is one.
-      const { stiggContext, agents, hooks } = governance();
-      const model = (agent: string) =>
-        wrapLanguageModel({
-          model: anthropic(MODEL),
-          middleware: stiggVercelMiddleware({
+      // The researcher's search is priced per result, as in every orchestrator example.
+      const { stiggContext, agents, hooks } = governance(SEARCH_TOOL);
+      // One middleware per agent, shared by its model and its tools: a tool call is governed as the
+      // model step that asked for it, which only that middleware saw.
+      const middlewares = new Map<string, ReturnType<typeof stiggVercelMiddleware>>();
+      const middleware = (agent: string) => {
+        let governed = middlewares.get(agent);
+        if (!governed) {
+          governed = stiggVercelMiddleware({
             stigg,
             stiggContext: { ...stiggContext, ...defined(agents?.[agent]?.stiggContext) },
+            tools: agents?.[agent]?.tools,
             hooks: asAgent(hooks, agent),
-          }),
-        });
-      const lead = build({ stigg, model });
+          });
+          middlewares.set(agent, governed);
+        }
+        return governed;
+      };
+      const model = (agent: string) => wrapLanguageModel({ model: anthropic(MODEL), middleware: middleware(agent) });
+      const tools = <T extends ToolSet>(agent: string, toolSet: T): T =>
+        agents?.[agent]?.tools ? middleware(agent).tools(toolSet) : toolSet;
+      const lead = build({ stigg, model, tools });
 
       let history: ModelMessage[] = [];
       return {

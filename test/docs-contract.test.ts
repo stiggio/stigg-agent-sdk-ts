@@ -32,6 +32,7 @@ const docs = [
   'README.md',
   join('docs', 'guide.md'),
   join('docs', 'langchain.md'),
+  join('docs', 'vercel-ai.md'),
   join('docs', 'instances.md'),
   join('examples', 'README.md'),
 ].filter((doc) => existsSync(join(ROOT, doc)));

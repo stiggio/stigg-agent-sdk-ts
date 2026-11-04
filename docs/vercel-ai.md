@@ -106,15 +106,70 @@ the tools that run sub-agents.
 **One governed model per agent.** The agent is the one named in that model's middleware: share one
 model between two agents and everything is reported for the first.
 
+## Paid tools
+
+A model call is governed whenever the middleware is there. A tool is governed only when the
+middleware's `tools` names it, because most tools cost the customer nothing. A model middleware
+never sees a tool run, so pass your tools through the same middleware's `tools()`: it wraps each
+one's `execute`, so the tool is checked before it runs and reported after it succeeds.
+
+```ts
+const stiggMiddleware = stiggVercelMiddleware({
+  stigg,
+  stiggContext: { agentId: 'agent-researcher', entitlement: credits },
+  tools: {
+    // Check, then one unit per call.
+    send_email: { currencyId: 'credits' },
+    // Check, then report what the call used: here, a credit per search result.
+    web_search: { entitlement: { currencyId: 'credits' }, usage: ({ output }) => ({ credits: output.results.length }) },
+    // Every tool not named here...
+    '*': { currencyId: 'credits' },
+    // ...except a sub-agent held as a tool, whose own model calls are already reported.
+    writer: false,
+  },
+});
+
+const researcher = new ToolLoopAgent({
+  model: wrapLanguageModel({ model: anthropic(MODEL), middleware: stiggMiddleware }),
+  tools: stiggMiddleware.tools({ send_email, web_search, writer }),
+});
+```
+
+The entries are the LangChain binding's - see [Tools](langchain.md#tools) for what each one checks
+and reports - except that a `usage` mapper gets the tool's `output` exactly as `execute` returned it.
+On top of those:
+
+- **Who pays.** A tool call is checked and reported as the model step that asked for it: the same
+  agent, and the customer that step named in `providerOptions.stigg`. Nothing new to pass.
+- **Order.** A tool is checked once the step that asked for it has been reported, so a tool that
+  shares the model's budget sees what the model spent.
+- **One middleware.** Call `tools()` on the middleware of the model that calls those tools: the
+  tool call is found by its id, which only that middleware saw.
+- **Approved tools.** With `needsApproval`, the AI SDK runs an approved tool at the start of the
+  next call, before any model step - so there is no step to take the customer from, nor when the
+  approval reaches another server instance. Name it in the tool's own context instead:
+  `toolsContext: { send_email: { stigg: { customerId } } }` on `ai` 7, `experimental_context: { stigg:
+{ customerId } }` on `ai` 6. A tool with a `contextSchema` gets only what the schema declares, so add
+  `stigg` to it. With neither, the tool is governed by the middleware's own
+  `stiggContext` - its default customer, or refused with no customer at all - and the SDK warns
+  once per tool.
+- **Parallel calls.** The tools one step asks for run at once, so they are all checked before any of
+  them reports: together they can spend a little past the budget, as in LangChain.
+- **Streaming tools.** An `execute` written as `async function*` streams its results through, and is
+  reported by its last one. A plain function that returns an async iterable is run to its end and
+  answered by its last value, without the results in between.
+- **Events.** A tool is reported as `tool.<name>` - put a meter on it.
+
 ## What a refusal does
 
-A refusal is `AccessDeniedError`, thrown from the refused model call.
+A refused model call throws `AccessDeniedError`. A refused tool does not run.
 
 | Refused                                              | What happens                                                                                                                                                                                                                                                                                                                                              |
 | ---------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | A model call of the agent you called `generate()` on | `generate()` rejects with it. `stigg.denial(err)` reads the decision.                                                                                                                                                                                                                                                                                     |
 | A sub-agent run inside a tool                        | Left uncaught, the AI SDK hands the error's **message** to the calling model as the tool's result, and the agent goes on. That message names the refused entity and the reason - Stigg ids your model, and so your user, should not see. Catch it in your tool's `execute` and return something neutral, as above; the example asks a generalist instead. |
 | A model call inside `streamText` or `agent.stream()` | The stream does not reject: the error reaches `onError` and the stream ends. Read it there.                                                                                                                                                                                                                                                               |
+| A paid tool                                          | The tool does not run. It fails with `<tool> is not available: <reason>.`, which the AI SDK hands to the model as the tool's result, and the agent goes on. The message names neither the refused entity nor what is left. `stigg.denial(error)` reads the decision from the `tool-error` part.                                                           |
 
 ## Streaming
 
@@ -170,7 +225,12 @@ is not governed.
 
 ## Not covered yet
 
-- **Paid tools.** Only model calls are checked and metered. A tool's own cost - a paid search - is not.
+- **Tools the provider runs.** A provider tool (`type: 'provider'`, such as Anthropic's web search)
+  runs at the provider, not through `execute`, so it cannot be checked.
+- **Client-side tools.** A tool with no `execute` runs in your client, not here, so it is not
+  governed.
+- **Sub-agents in tools.** The AI SDK keeps no run tree, so a sub-agent run inside a tool does not
+  inherit the customer: pass `providerOptions.stigg` to it yourself, as above.
 - **Vercel Workflow.** A durable step serializes the model and rebuilds it from its provider, which
   drops the middleware: that step runs ungoverned.
 

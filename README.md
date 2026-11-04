@@ -165,7 +165,7 @@ request.
 | | Orchestrator | | Orchestrator |
 | --- | --- | --- | --- |
 | <img src="https://raw.githubusercontent.com/stiggio/stigg-agent-sdk-ts/main/docs/logos/langchain.svg" width="18" alt=""> | [LangChain](docs/langchain.md) | <img src="https://raw.githubusercontent.com/stiggio/stigg-agent-sdk-ts/main/docs/logos/langgraph.svg" width="18" alt=""> | [LangGraph](docs/langchain.md#a-hand-built-langgraph) |
-| <img src="https://raw.githubusercontent.com/stiggio/stigg-agent-sdk-ts/main/docs/logos/google-adk.png" width="18" alt=""> | [Google ADK](docs/guide.md#google-adk-one-plugin-per-runner) | <img src="https://raw.githubusercontent.com/stiggio/stigg-agent-sdk-ts/main/docs/logos/vercel.svg" width="18" alt=""> | [Vercel AI SDK](docs/vercel-ai.md) (model calls, for now) |
+| <img src="https://raw.githubusercontent.com/stiggio/stigg-agent-sdk-ts/main/docs/logos/google-adk.png" width="18" alt=""> | [Google ADK](docs/guide.md#google-adk-one-plugin-per-runner) | <img src="https://raw.githubusercontent.com/stiggio/stigg-agent-sdk-ts/main/docs/logos/vercel.svg" width="18" alt=""> | [Vercel AI SDK](docs/vercel-ai.md) |
 | | Your own harness, through `stigg.middleware()` | | |
 
 Each binding is written against the *shape a vendor returns*, not against its SDK — so installing
@@ -187,7 +187,7 @@ rather than handing back a client that quietly meters nothing.
 | Meter a gateway you operate | `client.stigg.headers()` out, `stigg.ingestFromHeaders(...)` back |
 | Govern a LangChain / LangGraph agent graph ([guide](docs/langchain.md)) | `new StiggLangChainCallbackHandler({ stigg, agents, tools })` from `@stigg/agent-sdk-js/langchain` |
 | Govern a Google ADK agent graph ([guide](docs/guide.md#google-adk-one-plugin-per-runner)) | `new StiggAdkPlugin({ stigg, agents, tools, stepContext })` from `@stigg/agent-sdk-js/adk`, in the Runner's `plugins` |
-| Govern a Vercel AI SDK model or agent ([guide](docs/vercel-ai.md)) | `wrapLanguageModel({ model, middleware: stiggVercelMiddleware({ stigg, stiggContext }) })`, a call's own in `providerOptions.stigg` |
+| Govern a Vercel AI SDK model or agent ([guide](docs/vercel-ai.md)) | `wrapLanguageModel({ model, middleware: stiggVercelMiddleware({ stigg, stiggContext, tools }) })`, a call's own in `providerOptions.stigg`; paid tools through `middleware.tools(...)` |
 | Govern a graph from your own harness | `stigg.middleware({ stiggContext, agents })` |
 
 One wrapped client serves every customer and every agent: the context is an argument, given once at

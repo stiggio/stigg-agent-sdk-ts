@@ -29,6 +29,8 @@ describe('the Vercel AI SDK handoff example', () => {
       assert.match(stdout, new RegExp(`\\[${agent}\\]\\s+stigg ingest credits=1 ok=true`), `${agent} is ingested`);
     }
     assert.equal(stdout.match(/\[writer\] done/g)?.length, 4, 'the writer answers every turn');
+    // Its paid search is checked too: two model calls and a search a request, then one on the fourth.
+    assert.equal(stdout.match(/\[researcher\]\s+stigg check allowed/g)?.length, 10, 'the search is checked');
     // The researcher's budget runs out on the fourth request.
     assert.match(stdout, /\[researcher\]\s+stigg check REFUSED remaining=0/);
     assert.match(stdout, /another pass - researcher refused \(BudgetExceeded by agent-vercel-ai-researcher\)/);
