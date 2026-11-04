@@ -26,6 +26,7 @@ import { EngineError } from '../errors';
 import { GOVERNANCE_HEADERS, type GovernanceHeaders } from '../headers';
 import { flattenRaw } from './dimensions';
 import { safely } from './hooks';
+import type { AudrEmitter } from './audr';
 import { traceCheck, traceIngest } from './telemetry';
 import { addMetrics, isEnforced, type ResolvedContext } from './context';
 import type { EngineReportResult, GovernanceEngine } from '../engine/engine';
@@ -120,6 +121,8 @@ export type SessionDeps = {
    * where an observability tool's trace is already open around the graph; off for `wrap`.
    */
   tracing?: boolean;
+  /** Writes an AUDR record for each measured call. Absent unless `audr` was passed at construction. */
+  audr?: AudrEmitter;
 };
 
 /** What a client did, for whoever wants to print it. Spans every context it served. */
@@ -290,6 +293,16 @@ export class GovernanceSession {
     const dimensions = measured.dimensions ? { ...context.dimensions, ...measured.dimensions } : context.dimensions;
     const idempotencyKey =
       measured.idempotencyKey ?? options.idempotencyKey ?? context.idempotencyKey ?? this.nextKey(context);
+    // Before the report, and whatever becomes of it: the call happened either way, and the record
+    // is a separate receipt for someone else. Here because this is the last point that still has
+    // the token counters - the mapper below turns them into Stigg's metrics.
+    const { audr } = this.deps;
+    if (audr) {
+      safely(
+        () => audr.emit(context, measured),
+        (err) => this.reportError(asEngineError('audr', err), 'audr', context, idempotencyKey),
+      );
+    }
     try {
       return this.send(context, context.usageMapper(measured), {
         dimensions,

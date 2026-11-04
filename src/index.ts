@@ -19,6 +19,9 @@ export type { SessionSummary, HookContext, IngestOptions, SessionHooks } from '.
 export { RAW_PREFIX, flattenRaw } from './core/dimensions';
 
 export type { CacheOptions, ErrorContext, NodeSdkClient, StiggAgentSDKOptions } from './config';
+// AUDR emission, on with `audr` at construction. Types only: the client is the application's own,
+// and every record carries its own `emitter`, so the host's client has nothing to stamp.
+export type { AudrClientLike, AudrEnvironment, AudrOptions, AudrRecord, AudrTrace } from './core/audr';
 
 export { describeDecision, remedyMessage } from './decision-text';
 export { GOVERNANCE_HEADERS, parseGovernanceHeaders } from './headers';
@@ -184,6 +187,22 @@ export type { BedrockRecipeOptions } from './bindings/client/gateways/bedrock/ty
 export { cloudflareRecipe } from './bindings/client/gateways/cloudflare/cloudflare-recipe';
 export type { CloudflareMetricName, CloudflareMetrics } from './bindings/client/gateways/cloudflare/cloudflare-recipe';
 export type { CloudflareRecipeOptions } from './bindings/client/gateways/cloudflare/types';
+// agentgateway - the open-source AI gateway (Solo.io's enterprise build and Gloo AI Gateway sit on
+// it). A default, ahead of
+// both wires it serves - OpenAI chat and responses, and Anthropic Messages - so its traffic reports
+// as `agentgateway.*` rather than as a direct call. Self-hosted, so give it your gateway's base URL at
+// `wrap(client, { recipe: agentgatewayRecipe({ baseUrl }) })`; it reports tokens and the model that served,
+// and no `cost`, because the gateway states no price on any response.
+export { agentgatewayRecipe } from './bindings/client/gateways/agentgateway/agentgateway-recipe';
+export type {
+  AgentgatewayMetricName,
+  AgentgatewayMetrics,
+} from './bindings/client/gateways/agentgateway/agentgateway-recipe';
+export type { AgentgatewayRecipeOptions } from './bindings/client/gateways/agentgateway/types';
+// Plain HTTP to a gateway, for an application with no SDK client to wrap: `stigg.wrapFetch` gates
+// and meters a `fetch` the way `wrap` does a client, routing each request to a recipe method by
+// its path. These are its option and return types.
+export type { FetchLike, FetchOptions, GovernedFetch, GovernedRequestInit } from './bindings/fetch/types';
 export { typesafeRecipe, estimateFromState } from './bindings/client/providers/typesafe/typesafe-recipe';
 export type { TypeSafeMetric, TypeSafeMetrics } from './bindings/client/providers/typesafe/typesafe-recipe';
 export { weightedMetrics } from './bindings/shared/weighted-metrics';

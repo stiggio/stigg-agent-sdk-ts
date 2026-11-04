@@ -31,6 +31,8 @@ const ALLOWED: Record<string, string> = {
   '@langchain/core/callbacks/base': 'bindings/orchestrator/langchain/callback-handler.ts',
   // Likewise ADK, reached only through `@stigg/agent-sdk-js/adk`.
   '@google/adk': 'bindings/orchestrator/adk/plugin.ts',
+  // Types only - see the test below - so an application that leaves AUDR off never needs it.
+  '@openaudr/audr': 'core/audr.ts',
 };
 
 const sources = (dir = ''): string[] =>
@@ -98,6 +100,13 @@ describe('what src/ is allowed to import', () => {
       'the main entry must not load the LangChain binding at runtime',
     );
     assert.ok(runtimeGraph('integrations/langchain.ts').has('bindings/orchestrator/langchain/callback-handler.ts'));
+  });
+
+  it('names @openaudr/audr for its types alone, which compile away', () => {
+    const source = readFileSync(join(SRC, 'core/audr.ts'), 'utf8');
+    const named = [...source.matchAll(/^import (type )?\{[^}]*\} from '@openaudr\/audr'/gm)];
+    assert.ok(named.length > 0);
+    assert.ok(named.every(([, typeOnly]) => typeOnly));
   });
 
   it('keeps ADK out of the main entry, so only `/adk` loads it', () => {

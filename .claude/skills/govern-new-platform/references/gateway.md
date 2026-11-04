@@ -35,6 +35,13 @@ lifecycle splits across the boundary — the application checks in-process, attr
 `x-stigg-*` headers via `run.headers()`, and the proxy only ingests through
 `stigg.ingestFromHeaders(...)`. Governance never leaves the process.
 
+**A gateway you call with plain HTTP** - no SDK, the application posts JSON with `fetch` - is the
+first case reached through a different door, not a third case. `stigg.wrapFetch({ baseUrl, recipe })`
+(in `src/bindings/fetch/`) routes each request by its path to the recipe method that names it, so
+the recipe you write for the SDK route governs raw HTTP too, with no extra code. Only a method
+whose HTTP route `wrap-fetch.ts` knows is reachable that way - add the route to its `ROUTES` table
+if a new wire needs one.
+
 If the request is for a gateway you operate, **there is no recipe to write**. The binding already
 exists in `src/bindings/proxy/`, and the work is configuration plus possibly a new
 `ObservedVendor` value in `token-usage.ts`. Say so; it is a much smaller job than the requester

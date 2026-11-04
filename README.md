@@ -154,7 +154,11 @@ closed, and conflating them is how an outage takes an application down.
 | --- | --- | --- | --- |
 | <img src="https://raw.githubusercontent.com/stiggio/stigg-agent-sdk-ts/main/docs/logos/bedrock.svg" width="18" alt=""> | Amazon Bedrock | <img src="https://raw.githubusercontent.com/stiggio/stigg-agent-sdk-ts/main/docs/logos/litellm.png" width="18" alt=""> | LiteLLM |
 | <img src="https://raw.githubusercontent.com/stiggio/stigg-agent-sdk-ts/main/docs/logos/cloudflare.svg" width="18" alt=""> | Cloudflare Workers AI | <img src="https://raw.githubusercontent.com/stiggio/stigg-agent-sdk-ts/main/docs/logos/openrouter.svg" width="18" alt=""> | OpenRouter |
-| <img src="https://raw.githubusercontent.com/stiggio/stigg-agent-sdk-ts/main/docs/logos/databricks.svg" width="18" alt=""> | Databricks | | |
+| <img src="https://raw.githubusercontent.com/stiggio/stigg-agent-sdk-ts/main/docs/logos/databricks.svg" width="18" alt=""> | Databricks | | agentgateway (incl. Solo.io Enterprise) |
+
+A gateway called with plain HTTP rather than through an SDK is governed the same way:
+`stigg.wrapFetch({ baseUrl, recipe })` hands back a `fetch` that is checked and metered per
+request.
 
 **Orchestrators** — every agent in a graph checked and metered as itself, its tools included:
 
@@ -175,6 +179,7 @@ rather than handing back a client that quietly meters nothing.
 | You want to | Use |
 | --- | --- |
 | Govern a client | `stigg.wrap(client, { stiggContext })` |
+| Govern plain HTTP calls to a gateway | `stigg.wrapFetch({ baseUrl, recipe, stiggContext })` |
 | Gate without a client to wrap | `stigg.check(context)` |
 | Meter something you measured yourself | `stigg.report(context, metrics)` |
 | Give an agent its own budget | `stigg.register({ customerId, agentId, budget })` |

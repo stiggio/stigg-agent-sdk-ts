@@ -8,6 +8,7 @@ import { describe, it } from 'node:test';
 import { openAIRecipe } from '../src/bindings/client/providers/openai/openai-recipe';
 import { openrouterRecipe } from '../src/bindings/client/gateways/openrouter/openrouter-recipe';
 import { litellmRecipe } from '../src/bindings/client/gateways/litellm/litellm-recipe';
+import { agentgatewayRecipe } from '../src/bindings/client/gateways/agentgateway/agentgateway-recipe';
 import { fromResponsesUsage, normalizeUsage } from '../src/bindings/shared/token-usage';
 import type { Measurement, TokenUsage } from '../src/types';
 
@@ -164,6 +165,7 @@ describe('a gateway governs every surface the OpenAI recipe does', () => {
   for (const [label, recipe] of [
     ['openrouter', openrouterRecipe()],
     ['litellm', litellmRecipe()],
+    ['agentgateway', agentgatewayRecipe()],
   ] as const) {
     it(`${label} declares at least the same methods, so none is left ungated by matching first`, () => {
       // A superset, not an equal set: these recipes are matched ahead of the OpenAI one, so every

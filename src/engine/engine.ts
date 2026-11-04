@@ -131,9 +131,14 @@ export type EntityPlacement = {
   /**
    * Set the budget only when the assignment does not exist yet. An existing one keeps its limit
    * and cadence, so a raise made in the dashboard survives the next run. Mutually exclusive with
-   * `usageLimit` - it costs one extra read, which is why it is not the default.
+   * `usageLimit` - it costs one extra read, which is why a number is never seeded unless asked for.
+   *
+   * `null` seeds an unlimited assignment - the metering-only one, which puts the agent in the tree
+   * and tracks its usage without its own assignment refusing it. It is what a budget with no limit
+   * sends, so that case pays the read on every call. Unlike a numeric seed it still applies the
+   * caller's `cadence` to an existing assignment, as a budget with no limit always has.
    */
-  usageLimitOnCreate?: number;
+  usageLimitOnCreate?: number | null;
   cadence?: string;
   /** The entities the budget is scoped to - its own assignment beside the agent's whole one. */
   scopeEntityIds?: string[];

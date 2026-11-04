@@ -21,6 +21,7 @@ import {
   databricksExternalRecipe,
 } from '../src/bindings/client/gateways/databricks/databricks-recipe';
 import { cloudflareRecipe } from '../src/bindings/client/gateways/cloudflare/cloudflare-recipe';
+import { agentgatewayRecipe } from '../src/bindings/client/gateways/agentgateway/agentgateway-recipe';
 import { bedrockRecipe } from '../src/bindings/client/gateways/bedrock/bedrock-recipe';
 import { typesafeRecipe } from '../src/bindings/client/providers/typesafe/typesafe-recipe';
 import { readFile } from 'node:fs/promises';
@@ -106,6 +107,13 @@ const PUBLISHED = [
       'cloudflare.ai.run',
     ],
   ],
+  // One self-hosted gateway, reached over two wires. One vendor, because it is one deployment
+  // whichever client reached it - the wire is already in the name.
+  [
+    'agentgateway',
+    agentgatewayRecipe(),
+    ['agentgateway.chat.completions.create', 'agentgateway.responses.create', 'agentgateway.messages.create'],
+  ],
   ['gemini', geminiRecipe, ['gemini.models.generateContent', 'gemini.models.generateContentStream']],
   ['gemini (chats)', geminiChatRecipe, ['gemini.chats.sendMessage', 'gemini.chats.sendMessageStream']],
 ] as const;
@@ -181,7 +189,7 @@ describe('the README is the contract, so it cannot drift from the code', () => {
     // the table, the meter example, a paragraph. A name is only useful if every mention is right.
     const documented = [
       ...readme.matchAll(
-        /`((?:anthropic|openai|openrouter|litellm|typesafe|gemini|mistral|ollama|groq|bedrock|databricks-external|databricks|cloudflare)\.[a-zA-Z.]+)`/g,
+        /`((?:anthropic|openai|openrouter|litellm|typesafe|gemini|mistral|ollama|groq|bedrock|databricks-external|databricks|cloudflare|agentgateway)\.[a-zA-Z.]+)`/g,
       ),
     ].map((match) => match[1]);
     const derived = [...PUBLISHED, ['typesafe', typesafeRecipe, ['typesafe.systemOne']] as const].flatMap(

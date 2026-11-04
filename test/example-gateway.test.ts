@@ -53,3 +53,14 @@ for (const [label, file] of [
     });
   });
 }
+
+describe('the agentgateway fetch example', () => {
+  it('gates and meters plain HTTP on every door it takes', async () => {
+    const stdout = await runExample('examples/gateway/agentgateway.ts');
+    // Buffered JSON, streamed Chat Completions, streamed Anthropic Messages: one check and one
+    // ingest each, with nothing lost on the way - a stream nobody metered would show as 2 here.
+    assert.equal((stdout.match(/\[governance\] check hasAccess=true/g) ?? []).length, 3);
+    assert.equal((stdout.match(/\[governance\] ingest \S+ key=\S+ ok=true/g) ?? []).length, 3);
+    assert.match(stdout, /checks=3 ingested=3 failed_ingests=0/);
+  });
+});

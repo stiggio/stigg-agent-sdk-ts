@@ -154,6 +154,15 @@ class RunTree {
     return this.agentAt(run.parent);
   }
 
+  /** The top of the tree above a run, as far as this handler saw it start. */
+  rootOf(runId: string): string {
+    let current = runId;
+    for (let parent = this.open.get(current)?.parent; parent !== undefined; parent = this.open.get(current)?.parent) {
+      current = parent;
+    }
+    return current;
+  }
+
   isAgent(name: string): boolean {
     return this.agents.has(name);
   }
@@ -243,7 +252,11 @@ export class StiggLangChainCallbackHandler extends BaseCallbackHandler {
     _tags?: string[],
     metadata?: Record<string, unknown>,
   ): Promise<void> {
-    return this.middleware.startModel(runId, this.attributionOf(parentRunId, metadata), 'langchain.chat_model');
+    return this.middleware.startModel(
+      runId,
+      this.modelAttributionOf(runId, parentRunId, metadata),
+      'langchain.chat_model',
+    );
   }
 
   // The completion-model path, for an LLM that is not a chat model. Same gate, same meter.
@@ -256,7 +269,7 @@ export class StiggLangChainCallbackHandler extends BaseCallbackHandler {
     _tags?: string[],
     metadata?: Record<string, unknown>,
   ): Promise<void> {
-    return this.middleware.startModel(runId, this.attributionOf(parentRunId, metadata), 'langchain.llm');
+    return this.middleware.startModel(runId, this.modelAttributionOf(runId, parentRunId, metadata), 'langchain.llm');
   }
 
   override handleLLMEnd(output: unknown, runId: string): Promise<void> {
@@ -308,6 +321,28 @@ export class StiggLangChainCallbackHandler extends BaseCallbackHandler {
   override handleToolError(_err: unknown, runId: string): void {
     this.runs.end(runId);
     this.middleware.abandon(runId);
+  }
+
+  /**
+   * A model step's attribution, plus what its AUDR record names: the provider and model LangChain
+   * states in its `ls_*` metadata, and the step's place in the run tree - the top-level run as the
+   * AUDR run, the run directly above as the parent span.
+   */
+  private modelAttributionOf(
+    runId: string,
+    parentRunId: string | undefined,
+    metadata: Record<string, unknown> | undefined,
+  ): StepAttribution {
+    const text = (value: unknown) => (typeof value === 'string' && value ? value : undefined);
+    return {
+      ...this.attributionOf(parentRunId, metadata),
+      audr: {
+        provider: text(metadata?.ls_provider),
+        model: text(metadata?.ls_model_name),
+        runId: parentRunId === undefined ? runId : this.runs.rootOf(parentRunId),
+        parentSpanId: parentRunId,
+      },
+    };
   }
 
   /**

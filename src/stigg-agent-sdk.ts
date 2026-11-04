@@ -31,6 +31,7 @@ import { geminiChatRecipe, geminiRecipe } from './bindings/client/providers/gemi
 import { litellmRecipe } from './bindings/client/gateways/litellm/litellm-recipe';
 import { databricksRecipe } from './bindings/client/gateways/databricks/databricks-recipe';
 import { cloudflareRecipe } from './bindings/client/gateways/cloudflare/cloudflare-recipe';
+import { agentgatewayRecipe } from './bindings/client/gateways/agentgateway/agentgateway-recipe';
 import { groqRecipe } from './bindings/client/providers/groq/groq-recipe';
 import { mistralRecipe } from './bindings/client/providers/mistral/mistral-recipe';
 import { ollamaRecipe } from './bindings/client/providers/ollama/ollama-recipe';
@@ -42,6 +43,8 @@ import { createClientRegistry } from './bindings/client/core/registry';
 import type { ClientRegistry } from './bindings/client/core/types';
 import { wrapClient } from './bindings/client/core/wrap-client';
 import { createAgentMiddleware, resolveAgents } from './bindings/orchestrator/core/agent-middleware';
+import { wrapFetch } from './bindings/fetch/wrap-fetch';
+import type { FetchOptions, GovernedFetch } from './bindings/fetch/types';
 import { observedMeasurement } from './bindings/shared/token-usage';
 import { isEnforced, noCustomer, overrideContext, planId, resolveContext } from './core/context';
 import type { ContextDefaults } from './core/context';
@@ -50,6 +53,7 @@ import { GovernanceSession } from './core/session';
 import type { SessionSummary } from './core/session';
 import type { SessionHooks } from './core/session';
 import { safely } from './core/hooks';
+import { createAudrEmitter, type AudrEmitter } from './core/audr';
 import type {
   Metrics,
   GovernedAgentMiddleware,
@@ -96,6 +100,10 @@ export const DEFAULT_RECIPES = [
   // claim that client and meter gateway traffic as direct Anthropic traffic. The same argument puts
   // it ahead of `openAIRecipe` for its OpenAI-shaped routes and for Workers AI's compatible one.
   cloudflareRecipe(),
+  // Ahead of `anthropicRecipe` for the same reason as Cloudflare: agentgateway answers on the
+  // Anthropic Messages wire too, and only the base URL tells its `Anthropic` client from a direct
+  // one. Without a configured base URL it matches on a hostname label - see the recipe.
+  agentgatewayRecipe(),
   anthropicRecipe,
   openrouterRecipe(),
   litellmRecipe(),
@@ -194,7 +202,8 @@ function toPlacement(input: RegisterInput): EntityPlacement | undefined {
     throw new Error(
       `Agent ${input.agentId} asked to seed a budget with no limit to seed. ` +
         "`budget.apply: 'on-create'` writes a cap the first time and never again, so there is " +
-        'nothing to write without `budget.limit`.',
+        'nothing to write without `budget.limit`. To seed an unlimited, metering-only budget, ' +
+        'leave out both `limit` and `apply`.',
     );
   }
   // Each entry names an entity, and a blank one names none: the budget would be scoped to an
@@ -205,12 +214,15 @@ function toPlacement(input: RegisterInput): EntityPlacement | undefined {
         'Leave it out, or pass [], for the whole budget.',
     );
   }
+  // No limit at all is metering only: an agent with no assignment is in nobody's tree and its usage
+  // is counted against nothing, so it gets an unlimited one - seeded, so a cap set later survives.
+  const tracking = !onCreate && input.budget.limit === undefined;
   return {
     parentId,
     entitlement,
     cadence,
     usageLimit: onCreate ? undefined : input.budget.limit,
-    usageLimitOnCreate: onCreate ? (input.budget.limit ?? undefined) : undefined,
+    usageLimitOnCreate: tracking ? null : onCreate ? (input.budget.limit ?? undefined) : undefined,
     scopeEntityIds: scope?.length ? scope : undefined,
   };
 }
@@ -236,6 +248,8 @@ export class StiggAgentSDK {
   private readonly clients: ClientRegistry;
   /** Every session this SDK handed out, so `flush()` can drain all of them at once. */
   private readonly sessions = new Set<GovernanceSession>();
+  /** One for the whole SDK, so every client and middleware writes to the same AUDR client. */
+  private readonly audr?: AudrEmitter;
   /** The session the no-client paths share. Built on first use. */
   private loose?: GovernanceSession;
   /**
@@ -294,6 +308,8 @@ export class StiggAgentSDK {
   constructor(first?: string | StiggAgentSDKOptions, second?: Omit<StiggAgentSDKOptions, 'apiKey'>) {
     this.config = resolveConfig(toOptions(first, second));
     this.clients = createClientRegistry(DEFAULT_RECIPES);
+    if (this.config.audr)
+      this.audr = createAudrEmitter(this.config.audr, (message) => this.config.logger.warn(message));
   }
 
   /** Releases what this SDK's engine holds open. */
@@ -518,6 +534,54 @@ export class StiggAgentSDK {
   }
 
   /**
+   * Governs plain HTTP calls to a gateway, for an application that posts JSON with `fetch` instead
+   * of holding an SDK client - the same gate and meter `wrap` gives a client, keyed on the request
+   * path rather than on a method.
+   *
+   * ```ts
+   * const gatewayFetch = stigg.wrapFetch({
+   *   baseUrl: 'http://agentgateway.internal:8080',
+   *   recipe: agentgatewayRecipe(),
+   *   stiggContext: { customerId, entitlement: { currencyId: 'credits' } },
+   * });
+   * await gatewayFetch('http://agentgateway.internal:8080/v1/chat/completions', {
+   *   method: 'POST',
+   *   body: JSON.stringify({ model: 'gpt-5-mini', messages }),
+   *   stiggContext: { agentId: 'support-bot' },
+   * });
+   * ```
+   *
+   * The recipe is named rather than detected, because a URL alone cannot say who bills. A request
+   * outside `baseUrl`, or to a route the recipe does not declare, goes through untouched.
+   */
+  wrapFetch(options: FetchOptions): GovernedFetch {
+    void this.ensureStarted().catch((err: unknown) => this.reportStartupFailure(err));
+
+    const fetchFn = options.fetch ?? globalThis.fetch;
+    if (typeof fetchFn !== 'function') {
+      throw new Error('No `fetch` to govern: pass `fetch` in the options, or run on Node 22 or later.');
+    }
+
+    const session = this.newSession(options.hooks);
+    const context = resolveContext(options.stiggContext ?? {}, randomUUID(), {
+      requireCustomer: false,
+      defaults: this.contextDefaults,
+    });
+    if (context.customerId && !isEnforced(context)) {
+      this.config.logger.warn(
+        '[stigg] this fetch named no entitlement, so nothing is checked and no request can be ' +
+          "refused - it meters only. Pass `entitlement: { currencyId: 'credits' }` in " +
+          '`stiggContext`, at the wrap or on a request, to gate it.',
+      );
+    }
+
+    const governed = wrapFetch(fetchFn, options.recipe, options.baseUrl, session, context);
+    this.attachGovernance(governed, session, context);
+    if (context.customerId) void session.warmUp(context);
+    return governed as GovernedFetch;
+  }
+
+  /**
    * An agent graph's governance middleware - the orchestration counterpart to `wrap`.
    *
    * There is no single client to gate in a graph: it is several agents, each spending against its
@@ -649,6 +713,7 @@ export class StiggAgentSDK {
       logger: this.config.logger,
       onError: this.config.onError,
       hooks: hooks ?? {},
+      audr: this.audr,
     });
     this.sessions.add(session);
     return session;

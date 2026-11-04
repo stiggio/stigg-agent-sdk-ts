@@ -45,6 +45,7 @@ import {
   databricksExternalRecipe,
 } from '../src/bindings/client/gateways/databricks/databricks-recipe';
 import { cloudflareRecipe } from '../src/bindings/client/gateways/cloudflare/cloudflare-recipe';
+import { agentgatewayRecipe } from '../src/bindings/client/gateways/agentgateway/agentgateway-recipe';
 import { typesafeRecipe } from '../src/bindings/client/providers/typesafe/typesafe-recipe';
 import { weightedMetrics } from '../src/bindings/shared/weighted-metrics';
 import type { ClientRecipe, MetricsOf } from '../src/bindings/client/core/types';
@@ -224,6 +225,7 @@ describe('a recipe reports what it says it reports', () => {
       ['litellm', litellmRecipe().metrics],
       ['databricks', databricksRecipe().metrics],
       ['cloudflare', cloudflareRecipe().metrics],
+      ['agentgateway', agentgatewayRecipe().metrics],
     ] as const) {
       const total = vendor === 'gemini' ? 'totalTokenCount' : TOTAL_TOKENS;
       assert.ok(metrics.includes(total as never), `${vendor} declares no total`);
@@ -245,6 +247,7 @@ describe('a recipe reports what it says it reports', () => {
       ['databricks', databricksRecipe()],
       ['databricks-external', databricksExternalRecipe()],
       ['cloudflare', cloudflareRecipe()],
+      ['agentgateway', agentgatewayRecipe()],
     ] as const) {
       const total = (recipe as ClientRecipe).totalTokensMetric;
       assert.ok(total, `${vendor} declares no total`);
