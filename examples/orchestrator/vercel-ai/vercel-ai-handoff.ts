@@ -1,5 +1,5 @@
 /**
- * Layer 3: a multi-agent Vercel AI SDK chat, each agent governed on its own.
+ * Layer 3: a multi-agent Vercel AI SDK chat, each agent governed on its own, its paid search too.
  *
  *   lead --tool--> researcher (web_search)  --refused--> generalist
  *        --tool--> writer
@@ -28,18 +28,14 @@ import { ToolLoopAgent, stepCountIs, tool, type ToolSet } from 'ai';
 import { z } from 'zod';
 import { HANDOFF, handoffCast } from '../core/scenarios';
 import { logAs, logToolCall, logToolResult, paint, preview } from '../core/style';
-import { MODEL, Request, runAgent, startVercelAIChat, type Agent } from './kit';
+import { MODEL, Request, SEARCH_TOOL, runAgent, startVercelAIChat, type Agent } from './kit';
 
-/**
- * The handoff scenario, with the lead as its top agent. Only model calls are governed here, so the
- * researcher spends two a request offline, not three: its budget is cut to run dry on the fourth.
- */
+/** The handoff scenario, with the lead as its top agent. */
 const cast = handoffCast('lead', {
   description: `lead -> researcher -> writer on ${MODEL}, a generalist standing in for a refused researcher`,
   parent: 'agent-vercel-ai-handoff',
   agentIdPrefix: 'agent-vercel-ai-',
 });
-cast.agents.researcher = { budget: 6 };
 
 const MAX_OUTPUT_TOKENS = 1_500;
 /** Model calls per agent per run: a tool loop that never answers stops here. */
@@ -67,13 +63,13 @@ const webSearch = tool({
   },
 });
 
-startVercelAIChat(cast, ({ stigg, model }) => {
-  // The agents - plain AI SDK, each on its own governed model.
+startVercelAIChat(cast, ({ stigg, model, tools: governed }) => {
+  // The agents - plain AI SDK, each on its own governed model, its paid tools governed with it.
   const agentNamed = (name: keyof typeof PROMPTS, tools: ToolSet = {}): Agent =>
     new ToolLoopAgent({
       model: model(name),
       instructions: PROMPTS[name],
-      tools,
+      tools: governed(name, tools),
       stopWhen: stepCountIs(MAX_STEPS),
       maxOutputTokens: MAX_OUTPUT_TOKENS,
       callOptionsSchema: Request,
@@ -86,7 +82,7 @@ startVercelAIChat(cast, ({ stigg, model }) => {
       }),
     });
   const agents: Record<string, Agent> = {
-    researcher: agentNamed('researcher', { web_search: webSearch }),
+    researcher: agentNamed('researcher', { [SEARCH_TOOL]: webSearch }),
     writer: agentNamed('writer'),
     generalist: agentNamed('generalist'),
   };
