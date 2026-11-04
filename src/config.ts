@@ -18,6 +18,7 @@ import { consoleLogger, type Logger, noopLogger } from './logger';
 import type { CacheOptions, NodeSdkClient } from './engine/node-sdk-engine';
 import type { CheckErrorAction, IngestMode } from './types';
 import type { EngineError } from './errors';
+import type { AudrOptions } from './core/audr';
 
 /** The key sent when the target is a URL that needs none. Never reaches a real environment. */
 const KEYLESS = 'offline-mock';
@@ -126,6 +127,14 @@ export type StiggAgentSDKOptions = {
    * Replace it to route an `EngineError` and its {@link ErrorContext} into your own telemetry.
    */
   onError?: (error: EngineError, context: ErrorContext) => void;
+  /**
+   * Also write an AUDR record (https://openaudr.dev) for every model call this SDK measures, to
+   * the application's own `@openaudr/audr` client. Off unless set.
+   *
+   * For systems other than Stigg - Chargebee, Lago, an OTel collector. Stigg already receives this
+   * usage directly, so do not point the client at a Stigg sink: every call would count twice.
+   */
+  audr?: AudrOptions;
 };
 
 export type ResolvedConfig = Omit<Required<z.infer<typeof dataSchema>>, 'baseUrl'> & {
@@ -134,6 +143,7 @@ export type ResolvedConfig = Omit<Required<z.infer<typeof dataSchema>>, 'baseUrl
   client?: NodeSdkClient;
   logger: Logger;
   onError: (error: EngineError, context: ErrorContext) => void;
+  audr?: AudrOptions;
 };
 
 const resolveLogger = (logger: StiggAgentSDKOptions['logger']): Logger => {
@@ -210,6 +220,7 @@ export function resolveConfig(options: StiggAgentSDKOptions = {}): ResolvedConfi
     ...parsed,
     cache: options.cache,
     client: options.client,
+    audr: options.audr,
     logger,
     // Never silent, never fatal. Replace it to route into your own telemetry.
     onError:
@@ -233,6 +244,7 @@ export function resolveConfig(options: StiggAgentSDKOptions = {}): ResolvedConfi
     ...config,
     apiKey: config.apiKey ? '[redacted]' : undefined,
     client: config.client ? '[client supplied by the caller]' : undefined,
+    audr: config.audr ? { environment: config.audr.environment, client: '[client supplied by the caller]' } : undefined,
   });
   for (const key of ['toJSON', Symbol.for('nodejs.util.inspect.custom')] as (string | symbol)[]) {
     Object.defineProperty(config, key, { value: redacted, enumerable: false, writable: false });

@@ -142,6 +142,39 @@ describe('provisioning a budget', () => {
     assert.equal(sent[0]!.parentId, 'team-1');
   });
 
+  it('a null seed creates an unlimited assignment, with a window, when none exists', async () => {
+    const { engine, sent } = engineWith([]);
+    await engine.upsertEntity('c', entity, { ...base, cadence: undefined, usageLimitOnCreate: null });
+
+    assert.equal(sent[0]!.usageLimit, null);
+    assert.equal(sent[0]!.cadence, 'P1M', 'governance requires a window on create');
+  });
+
+  it("a null seed creates with the caller's window when one is named", async () => {
+    const { engine, sent } = engineWith([]);
+    await engine.upsertEntity('c', entity, { ...base, cadence: 'P1D', usageLimitOnCreate: null });
+
+    assert.equal(sent[0]!.usageLimit, null);
+    assert.equal(sent[0]!.cadence, 'P1D', "'P1M' is only the default");
+  });
+
+  it('a null seed with no window named leaves an existing assignment entirely alone', async () => {
+    const { engine, sent } = engineWith([{ id: 'existing', scopeEntityIds: [] }]);
+    await engine.upsertEntity('c', entity, { ...base, cadence: undefined, usageLimitOnCreate: null });
+
+    assert.ok(!('usageLimit' in sent[0]!), 'a cap set in the dashboard must survive');
+    // The default is for creating one. Sent here, it would reset an admin's window every start.
+    assert.ok(!('cadence' in sent[0]!), 'nor is its window reset to the default');
+  });
+
+  it("a null seed leaves an existing limit alone, but still moves the caller's window", async () => {
+    const { engine, sent } = engineWith([{ id: 'existing', scopeEntityIds: [] }]);
+    await engine.upsertEntity('c', entity, { ...base, cadence: 'P1D', usageLimitOnCreate: null });
+
+    assert.ok(!('usageLimit' in sent[0]!), 'a cap set in the dashboard must survive');
+    assert.equal(sent[0]!.cadence, 'P1D');
+  });
+
   it('still upserts the entity and its placement when no budget is given at all', async () => {
     const { engine, sent, listed } = engineWith([{ id: 'existing' }]);
     await engine.upsertEntity('c', entity, { ...base });

@@ -565,6 +565,71 @@ function streamLiteLLM(res: ServerResponse, body: any, served: string, callId: s
 }
 
 // ----------------------------------------------------------------------------------------
+// agentgateway (OpenAI-compatible, no price anywhere)
+// ----------------------------------------------------------------------------------------
+
+const AGENTGATEWAY_TEXT =
+  'This is an automatic response from the built-in offline mock standing in for an ' +
+  'agentgateway. No network call was made and no tokens were billed.';
+
+/** The upstream's OpenAI usage block, forwarded as-is. No `cost`: the gateway states no price. */
+function agentgatewayUsage(body: any) {
+  const promptTokens = estimateTokens(body.messages);
+  const completionTokens = estimateTokens(AGENTGATEWAY_TEXT);
+  return {
+    prompt_tokens: promptTokens,
+    completion_tokens: completionTokens,
+    total_tokens: promptTokens + completionTokens,
+    prompt_tokens_details: { cached_tokens: 0 },
+  };
+}
+
+/**
+ * The gateway resolves the name a request used - an alias, a wildcard, a failover group - to the
+ * upstream model that answered, and the body says which. That difference is the routing drift
+ * the examples flag.
+ */
+const agentgatewayServed = (requested: string): string =>
+  requested.includes('-2025-') ? requested : `${requested}-2025-08-07`;
+
+function streamAgentgateway(res: ServerResponse, body: any, served: string, callId: string): void {
+  openSse(res);
+  const created = Math.floor(Date.now() / 1000);
+  const send = (obj: unknown) => res.write(`data: ${JSON.stringify(obj)}\n\n`);
+
+  for (const word of AGENTGATEWAY_TEXT.split(' ')) {
+    send({
+      id: callId,
+      object: 'chat.completion.chunk',
+      created,
+      model: served,
+      choices: [{ index: 0, delta: { content: `${word} ` }, finish_reason: null }],
+    });
+  }
+  send({
+    id: callId,
+    object: 'chat.completion.chunk',
+    created,
+    model: served,
+    choices: [{ index: 0, delta: {}, finish_reason: 'stop' }],
+  });
+  // Only when asked for, which is OpenAI's own rule and the gateway forwards it unchanged. A mock
+  // that always sent it would hide a caller who forgot `stream_options` metering nothing.
+  if (body.stream_options?.include_usage) {
+    send({
+      id: callId,
+      object: 'chat.completion.chunk',
+      created,
+      model: served,
+      choices: [],
+      usage: agentgatewayUsage(body),
+    });
+  }
+  res.write('data: [DONE]\n\n');
+  res.end();
+}
+
+// ----------------------------------------------------------------------------------------
 // Cloudflare Workers AI - its own result shape, and no price anywhere in it
 // ----------------------------------------------------------------------------------------
 
@@ -990,6 +1055,24 @@ export async function startMockServer(): Promise<MockServer> {
             },
             databricksHeaders(served),
           );
+        }
+        return;
+      }
+
+      if (url.includes('/agentgateway/') && url.endsWith('/chat/completions')) {
+        const callId = `chatcmpl-agwmock${Math.random().toString(16).slice(2, 8)}`;
+        const served = agentgatewayServed(String(body.model ?? 'gpt-5-mini'));
+        if (body.stream) {
+          streamAgentgateway(res, body, served, callId);
+        } else {
+          sendJson(res, {
+            id: callId,
+            object: 'chat.completion',
+            created: Math.floor(Date.now() / 1000),
+            model: served,
+            choices: [{ index: 0, finish_reason: 'stop', message: { role: 'assistant', content: AGENTGATEWAY_TEXT } }],
+            usage: agentgatewayUsage(body),
+          });
         }
         return;
       }

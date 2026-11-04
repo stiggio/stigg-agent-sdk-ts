@@ -69,6 +69,7 @@ const PUBLIC = [
   'weightedMetrics',
   'wrapClient',
   'cloudflareRecipe',
+  'agentgatewayRecipe',
 ];
 
 /** Reachable as `@stigg/agent-sdk-js/internal`, under a weaker promise. */

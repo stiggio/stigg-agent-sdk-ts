@@ -561,11 +561,22 @@ export type AgentBudget = {
    * A scoped budget governs only the requests it names: one naming no model, or a model with no
    * budget, is limited by the agent's whole budget and its ancestors' alone - with neither, by
    * nothing. Register the whole budget too.
+   *
+   * A scope with no `limit` meters that scope only: it is created unlimited, like a whole budget
+   * with no limit, so it shows that scope's usage and refuses nothing.
    */
   scope?: string[];
 } & (
   | {
-      /** The limit, written on every call. `null` clears whatever is assigned. */
+      /**
+       * The limit, written on every call. `null` clears whatever is assigned.
+       *
+       * Omitted, the agent is metering only: the first call creates an unlimited assignment, so its
+       * usage is tracked in the governance tree and its own assignment never refuses it - its
+       * ancestors' budgets and the customer's entitlement still can. Later calls leave the limit
+       * assigned by then - a cap set in the dashboard included - untouched, though a `cadence` they
+       * pass is still applied. `cadence` defaults to `'P1M'` on that create.
+       */
       limit?: number | null;
       /** Writes the limit every time. The default. */
       apply?: 'always';

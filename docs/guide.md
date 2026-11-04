@@ -302,6 +302,7 @@ that vendor's API would have guessed — so these are what your meters filter on
 | Databricks                | `databricks.chat.completions.create`, `databricks.responses.create`, `databricks.query` | `prompt_tokens`, `completion_tokens`, `total_tokens`, `reasoning_tokens`, `cache_read_input_tokens`, `cache_creation_input_tokens` — and no `cost`, because Databricks states none on any response. `databricks.query` is the first-party client and reports the first three only; it camelCases the wire and is renamed back, so both clients report one vocabulary |
 | Databricks — external models | `databricks-external.chat.completions.create`, `databricks-external.responses.create`, `databricks-external.query` | the same six. A separate vendor name because a different party is invoiced, and it is **opt-in**: the two routes are indistinguishable from the client, so naming it asserts something the SDK cannot check |
 | Cloudflare                | `cloudflare.chat.completions.create`, `cloudflare.responses.create`, `cloudflare.messages.create`, `cloudflare.ai.run` | the OpenAI set plus `cache_read_input_tokens`, `cache_creation_input_tokens` — the union across every wire it serves, and a call reports only the names its own route sent. No `cost` and no neuron count: neither Workers AI nor AI Gateway states a price on any response, so `cf_aig_log_id` rides as a dimension instead. A gateway **cache hit meters nothing**, because nobody was billed for it |
+| agentgateway              | `agentgateway.chat.completions.create`, `agentgateway.responses.create`, `agentgateway.messages.create` | the OpenAI set plus `cache_read_input_tokens`, `cache_creation_input_tokens` — the union across both wires it serves, and a call reports only the names its own route sent. No `cost`: the gateway is self-hosted and states no price on any response, so the model that served is attributed instead |
 | TypeSafe                  | `typesafe.systemOne`                                                | `input_tokens`, `output_tokens`, `total_tokens`                                           |
 | Gemini                    | `gemini.models.generateContent`, `gemini.models.generateContentStream` | `promptTokenCount`, `candidatesTokenCount`, `cachedContentTokenCount`, `thoughtsTokenCount`, `toolUsePromptTokenCount`, `totalTokenCount` |
 | Gemini — a chat           | `gemini.chats.sendMessage`, `gemini.chats.sendMessageStream`        | the same five                                                                             |
@@ -469,6 +470,7 @@ are recipes over the same wrapper. One you **operate** is the opposite binding a
 | Client — a gateway you **call**                  | `wrap(client, { recipe: openrouterRecipe() })`       | same wrapper; the recipe bills `usage.cost` and attributes `response.model`              | Yes, same as any client                    |
 | Client — a gateway whose cost is in a **header** | `wrap(client, { recipe: litellmRecipe() })`          | same wrapper; the recipe bills `x-litellm-response-cost` and attributes `response.model` | Yes, same as any client                    |
 | Client — a gateway that states **no** price      | `wrap(client, { recipe: databricksRecipe() })`       | same wrapper; no `cost` metric at all, and the model that answered is attributed instead | Yes, same as any client                    |
+| A gateway called with plain **HTTP** (`bindings/fetch`) | `stigg.wrapFetch({ baseUrl, recipe })`         | wraps the application's `fetch`; a request is routed by its path to the recipe method that names it, then gated and metered as that method | Yes, same as any client                    |
 | Gateway you **operate** (`bindings/proxy`)       | `client.stigg.headers()` → `stigg.ingestFromHeaders(...)` | attribution travels as `x-stigg-*` headers; `vendor` names the shape it observed         | **No — ingest only**                       |
 | Orchestrator — LangChain / LangGraph (`bindings/orchestrator`) | `new StiggLangChainCallbackHandler({ stigg, stiggContext, agents })` from `@stigg/agent-sdk-js/langchain`, one per graph, on `invoke(input, { callbacks, metadata })` — over the neutral `stigg.middleware(...)` | a callback handler: each step checked and billed as the agent that took it; checks before its agent's model calls and gated tools, ingests after | Yes — throws `AccessDeniedError` inside the refused agent; the graph decides |
 | Orchestrator — Vercel AI SDK (`bindings/orchestrator`) | `wrapLanguageModel({ model, middleware: stiggVercelMiddleware({ stigg, stiggContext }) })` — [guide](vercel-ai.md), one per agent's model — over the same `stigg.middleware(...)` | a language model middleware: every step of `generateText`, `streamText` and an agent checked before the model call, reported after; a call's context from `providerOptions.stigg` | Yes — throws `AccessDeniedError` from the refused model call |
@@ -655,6 +657,53 @@ The orchestrator example does exactly this when `AGENT_SDK_LANGFUSE_PUBLIC_KEY` 
 `AGENT_SDK_LANGFUSE_SECRET_KEY` are set, with each chat turn as one Langfuse trace and the chat as
 one session.
 
+#### Usage records for other systems: AUDR
+
+Off by default. Pass `audr` at construction and the SDK also writes an
+[AUDR](https://openaudr.dev/spec/v1.1.0/) record (Agent Usage Detail Record) for every model call
+it measures, to your own `@openaudr/audr` client. That client's sink decides where the records go:
+Chargebee, Lago, an OTel collector.
+
+`@openaudr/audr` is an optional peer dependency, at `>=0.2.0 <0.3`: the versions these records are
+checked against. Install it yourself (`npm install @openaudr/audr`); without `audr` the SDK never
+loads it.
+
+```ts
+import { Client } from '@openaudr/audr';
+
+const stigg = new StiggAgentSDK({
+  apiKey,
+  audr: { client: new Client(sink), environment: 'production' },
+});
+```
+
+Each record is signed `component: harness`, `name: @stigg/agent-sdk-js`, and carries:
+
+- **The call:** the provider, the model (from the response, falling back to the request), and the
+  token counters. The provider is the recipe's vendor, LangChain's `ls_provider`, or the AI SDK
+  model's `provider`. An endpoint wrapped through the OpenAI recipe reports as `openai` whatever
+  it is - DeepSeek, Together, vLLM - and ADK states no provider, so its records say `unknown`.
+- **Who it is for:** the customer as `account_id`, on every record, and the entitlement's id as
+  `feature_id` - for a credit currency, that is the currency's id.
+- **Where it ran:** inside a LangChain graph the top-level run is the AUDR run, and the model's
+  run is the span under its parent. Under ADK the invocation is the AUDR run. Through `wrap` or
+  the AI SDK, calls share a run only when they state the same `correlationId` in `stiggContext`;
+  without one, each call is its own run. The agent's name goes in `run.name`.
+- **Labels:** every dimension of the call - `stiggContext.dimensions` and the attribution key
+  among them - goes to your sink as a label. Keep out of them what should not leave the process.
+
+Govern each call through one path: a model call that reaches the SDK twice - a LangChain handler
+over a wrapped client - writes two records, and AUDR gives your sink no way to tell them apart.
+
+Records are written after the fact and cannot refuse a call, so enforcement stays with the check.
+Emission never fails a call either: a client that throws is reported to `onError` as `audr`.
+Estimated or incomplete usage (a stream abandoned before the vendor stated its count, a reply that
+stated only part of it) is not emitted, because AUDR has no way to mark a number as an estimate.
+Tool calls are not emitted yet.
+
+Stigg already receives this usage directly, so **do not point the AUDR client at a Stigg sink**:
+every call would be counted twice.
+
 #### Providers that speak the OpenAI wire format
 
 A large part of the ecosystem exposes an OpenAI-compatible API rather than one of its own:
@@ -682,6 +731,7 @@ which recipe matches, and that decides what you can meter:
 | a Databricks workspace `/serving-endpoints`  | `databricksRecipe` | `databricks.*`                    | tokens, model that answered       |
 | `https://api.cloudflare.com/client/v4/accounts/<id>/ai/v1` | `cloudflareRecipe` | `cloudflare.*`                    | tokens only                       |
 | `https://gateway.ai.cloudflare.com/v1/<account>/<gateway>/<provider>` | `cloudflareRecipe` | `cloudflare.*`                    | tokens, model that served, log id |
+| the agentgateway URL you configured  | `agentgatewayRecipe` | `agentgateway.*`                  | tokens, model that served         |
 | anything else OpenAI-compatible      | `openAIRecipe`     | `openai.*`                        | tokens only                       |
 
 Each of those covers **both OpenAI surfaces**, and a surface is its own event: Chat Completions
@@ -699,6 +749,18 @@ far as this SDK can tell, because that is all the client reveals.
 > to compare against, the way OpenRouter's own hostname does. So an unrelated OpenAI-compatible
 > endpoint that happens to contain the string, like `https://api.acme.com/litellm-compat/v1`, is
 > claimed by it and reports under `litellm.*`. Pass `recipe: openAIRecipe` to settle it explicitly.
+>
+> **The agentgateway recipe guesses the same way, and more narrowly.** agentgateway - and the
+> builds on it, Solo.io's enterprise edition and Gloo AI Gateway - is self-hosted too, so
+> `agentgatewayRecipe({ baseUrl })` is the reliable form, and the **only** one for Solo's and
+> Gloo's builds. Without a base URL it claims a client only when a dot-separated **hostname label**
+> is, or starts with, `agentgateway-` — what a default install names its service and namespace, as
+> in `http://agentgateway-proxy.agentgateway-system.svc/v1` — never a substring or a later part of a
+> label, so `myagentgateway.example.com` and `my-agentgateway.example.com` are left alone. `solo`
+> and `gloo` are not guessed on: they are words a customer picks for its own resources, and the
+> recipe sits ahead of LiteLLM, Databricks and OpenAI. It is registered ahead of `anthropicRecipe` as
+> well as `openAIRecipe`, because the gateway also answers on the Anthropic Messages wire and an
+> `Anthropic` client pointed at it would otherwise meter as direct Anthropic traffic.
 
 **The consequence worth planning for:** every provider in that last row reports under `openai.*`.
 A raw-events meter cannot tell Together from Fireworks from OpenAI itself, and neither can a
@@ -884,6 +946,47 @@ the tokens alone — the same features either way, one of them simply missing wh
 cannot carry it.
 That is the protocol rather than a limit of the binding, and the gateway example prints both
 numbers side by side so the difference is not a surprise in an invoice.
+
+**A gateway you call with plain HTTP** — no SDK client, just `fetch` posting JSON — has no
+client object for `wrap` to hold, and the proxy binding does not fit either: it ingests what a
+proxy *you* run observed, and a third-party gateway never calls Stigg. So `stigg.wrapFetch` wraps
+the one object such an application does hold, its `fetch`:
+
+```ts
+const gatewayFetch = stigg.wrapFetch({
+  baseUrl: 'http://agentgateway.internal:8080/v1',
+  recipe: agentgatewayRecipe(),
+  stiggContext: { customerId, entitlement: { currencyId: 'credits' } },
+});
+
+const res = await gatewayFetch('http://agentgateway.internal:8080/v1/chat/completions', {
+  method: 'POST',
+  headers: { 'content-type': 'application/json' },
+  body: JSON.stringify({ model: 'gpt-5-mini', messages }),
+  stiggContext: { agentId: 'support-bot' }, // optional, per request; never sent on the wire
+});
+```
+
+A request is matched to a recipe method by its path — `/chat/completions`, `/responses`,
+`/messages` — and from there it is that method's call: the same `estimate`, the same reader on
+the reply, the same event name (`agentgateway.chat.completions.create` either way). Any recipe
+over the OpenAI or Anthropic wire works, so `litellmRecipe()` or `openAIRecipe` govern raw HTTP
+the same way. It is named rather than detected, because a URL alone cannot say who bills.
+
+- **Only what the recipe declares is governed.** Another host, a `GET`, `/embeddings`,
+  `/messages/count_tokens`, `/threads/{id}/messages`, or an error reply passes through untouched
+  and meters nothing. A route is read from `baseUrl` down — `/chat/completions`, or
+  `/v1/chat/completions` for a base URL given without its `/v1`.
+- **A JSON reply is metered from a copy**, read before the response is handed back, so the
+  caller's body is untouched and `stigg.flush()` already waits for the ingest.
+- **A streamed reply is metered as the caller reads it.** The SSE body is observed in place rather
+  than teed, so nothing is buffered on the caller's behalf — and, as with an SDK stream, a body
+  read only part way meters what was read. It comes back as a new `Response` with the original
+  status and headers; `url` and `redirected` cannot be carried onto a constructed one. A Chat
+  Completions stream carries usage only when the request asks for it with
+  `stream_options: { include_usage: true }`; without it there is nothing to meter, as with `wrap`.
+- **A refusal rejects the `fetch`** with the same `AccessDeniedError` a wrapped client throws,
+  before any byte leaves.
 
 **A gateway you operate** — a proxy fronting services that may not even be Node — is the one that
 is not a binding in the full sense, and deliberately so: it is out-of-process and sees
@@ -1163,6 +1266,28 @@ There is no signup: a LiteLLM proxy is something you host, so this is a URL rath
 A group is free to resolve to a different deployment, and that difference is the routing drift
 the examples flag.
 
+### agentgateway
+
+There is no signup: agentgateway (or a build on it — Solo.io's enterprise edition, Gloo AI
+Gateway) runs in your own cluster, so this is a URL rather than an account.
+
+1. Install it with an LLM backend — agentgateway's own quickstart, or Solo's docs for the
+   enterprise build. It needs the upstream key for whatever it fronts in its own configuration.
+2. Expose its listener locally — both the open-source chart and Solo's enterprise one install an
+   `agentgateway-proxy` Gateway in `agentgateway-system`, listening on port 80:
+   `kubectl port-forward deployment/agentgateway-proxy -n agentgateway-system 8080:80`. Put the
+   OpenAI route in `.env` as `AGENT_SDK_AGENTGATEWAY_BASE_URL` — `http://localhost:8080/v1`. Setting it is what
+   selects the real gateway; leave it blank and the example uses the offline mock.
+3. Put a key in `AGENT_SDK_AGENTGATEWAY_API_KEY` only if the gateway enforces API-key auth.
+
+**Solo Enterprise for agentgateway** is the same gateway, so it takes the same steps and the same
+recipe. `example-client-solo` reaches it through the Anthropic SDK instead: set
+`AGENT_SDK_SOLO_BASE_URL` to the gateway **root** (`http://localhost:8080` — the SDK appends
+`/v1/messages`), and `AGENT_SDK_SOLO_API_KEY` only if the gateway enforces API-key auth.
+
+`AGENT_SDK_AGENTGATEWAY_MODEL` is whatever name the gateway exposes. The gateway is free to resolve it to
+a different upstream model, and that difference is the routing drift the example flags.
+
 ## 4. Point at a Stigg environment (optional)
 
 One key and one URL, pointed at whichever environment you mean. The key is environment-bound, so
@@ -1273,8 +1398,27 @@ reason: the hierarchy is per-capability, so one agent can sit under different pa
 different currencies.
 
 `budget.limit` is tri-state — a number caps it, `null` tracks without blocking (the observe-only
-rollout), and omitting it leaves whatever is already assigned untouched. Governance requires both
-it and `cadence` when it creates a budget, which is why both are passed above.
+rollout), and omitting it leaves the limit already assigned untouched (a `cadence` you pass is still
+applied). Governance requires both
+it and `cadence` when it creates a budget, which is why both are passed above; when it creates one for
+a call with no `limit`, the SDK supplies an unlimited limit, and the cadence too when you pass none
+(below).
+
+Omitting `limit` on an agent with no assignment yet is the metering-only case: the SDK creates an
+unlimited one (`cadence` defaults to `'P1M'`), so the agent sits in the tree and its usage shows
+there without its own assignment ever refusing it. Its ancestors still can: under the capped
+`team-research` below, the agent is refused with `BudgetExceeded` once the team runs out. A cap
+set on the agent later — in the dashboard or by a `limit` — is never overwritten by a call that
+omits `limit`:
+
+```ts
+await stigg.register({
+  customerId: 'customer-acme',
+  agentId: 'research-agent',
+  entityTypeId: 'agent',
+  budget: { entitlement: { currencyId: 'credits' }, parentId: 'team-research' },
+});
+```
 
 The pool is deliberately much larger than the agent budget, so a demo denial comes from the
 agent's own cap (`BudgetExceeded`) rather than an empty wallet (`InsufficientCredits`). Those are
@@ -1336,6 +1480,12 @@ there (or exporting it in your shell) overrides the fixture without editing `dem
 | `AGENT_SDK_DATABRICKS_EXTERNAL`        | unset                                    | `1` asserts the endpoint carries your own upstream key, so that provider invoices it rather than Databricks. An assertion the SDK cannot check — it switches both Databricks examples to `databricks-external.*` |
 | `AGENT_SDK_LITELLM_BASE_URL`           | `http://localhost:4000`                  | Your own proxy — self-hosted, so there is no public default                                                                          |
 | `AGENT_SDK_LITELLM_MODEL`              | `gpt-5`                                  | A model **group** from the proxy's config, not a provider slug                                                                       |
+| `AGENT_SDK_AGENTGATEWAY_BASE_URL`              | none                                     | agentgateway is self-hosted, so the gateway's **base URL** stands in for the key: blank ⇒ the offline mock, set ⇒ that gateway's OpenAI route (e.g. `http://localhost:8080/v1`) |
+| `AGENT_SDK_AGENTGATEWAY_API_KEY`               | — (falls back to `AGENTGATEWAY_API_KEY`)         | Only if your gateway enforces API-key auth. Not what selects the real gateway — the base URL is                                      |
+| `AGENT_SDK_SOLO_BASE_URL`              | none                                     | Solo Enterprise for agentgateway, for `example-client-solo`: the gateway **root** (the Anthropic SDK appends `/v1/messages`). Blank ⇒ the offline mock |
+| `AGENT_SDK_SOLO_API_KEY`               | — (falls back to `SOLO_API_KEY`)         | Only if the gateway enforces API-key auth                                                                                            |
+| `AGENT_SDK_SOLO_MODEL`                 | `claude-sonnet-5`                        | A model name the gateway exposes on its Anthropic route                                                                              |
+| `AGENT_SDK_AGENTGATEWAY_MODEL`                 | `gpt-5-mini`                             | A model name your gateway exposes — exact, wildcard, or an alias of your own. What it resolves to is reported as the served model    |
 | `STIGG_SERVER_API_KEY`                        | —                                        | **Server** key (`server-…`). A publishable `client-…` key fails every call with `IdentityForbidden`. Blank ⇒ the built-in Stigg mock |
 | `STIGG_BASE_URL`                       | `https://api.stigg.io`                   | Which environment that key belongs to                                                                                                |
 
@@ -1346,7 +1496,7 @@ change it to play with an example, it is a fixture.** A real application decides
 in code — what it bills against is part of its pricing, not of its deployment.
 
 The SDK's own settings are arguments rather than variables, which is why none of them appear here:
-`new StiggAgentSDK({ apiKey, baseUrl, cache, client, timeoutMs, logger, onError })` for the
+`new StiggAgentSDK({ apiKey, baseUrl, cache, client, timeoutMs, logger, onError, audr })` for the
 environment, and `wrap(client, { stiggContext })` — overridable inside any call's own parameters —
 for what a call is governed by.
 
@@ -1405,6 +1555,8 @@ Stigg account.
 | `example-client-ollama`     | [`client/ollama.ts`](../examples/client/ollama.ts)                     | A self-hosted engine that bills nobody: a flat client, counters flat on the response, and capacity rather than spend        |
 | `example-client-openrouter` | [`client/openrouter.ts`](../examples/client/openrouter.ts)             | `openrouterRecipe()` billing the credits actually charged instead of a token count                          |
 | `example-client-litellm`    | [`client/litellm.ts`](../examples/client/litellm.ts)                   | The same script against a self-hosted proxy. Streams, so it meters tokens — see the gateway example for why |
+| `example-client-agentgateway`       | [`client/agentgateway.ts`](../examples/client/agentgateway.ts)                         | An `OpenAI` client pointed at a self-hosted agentgateway: reports `agentgateway.*` rather than passing for direct OpenAI traffic, and attributes the model the gateway actually routed to. No price on the wire, so it meters tokens |
+| `example-client-solo`       | [`client/solo.ts`](../examples/client/solo.ts)                         | Solo Enterprise for agentgateway through the **Anthropic** SDK. Solo ships agentgateway, so it is the same recipe and reports `agentgateway.messages.create` — the gateway's other wire, which `anthropicRecipe` would otherwise claim as direct Anthropic traffic |
 | `example-client-databricks` | [`client/databricks.ts`](../examples/client/databricks.ts)             | An `OpenAI` client pointed at a workspace `/serving-endpoints`. The request names an **endpoint**, not a model, so the served model on the way back is the thing to watch. `AGENT_SDK_DATABRICKS_EXTERNAL=1` asserts the external-model route |
 | `example-client-typesafe`   | [`client/typesafe.ts`](../examples/client/typesafe.ts)                 | A non-chat client: typed questions, batched or one per call. **Needs a real TypeSafe key**                  |
 | `example-two-agents`        | [`client/two-agents.ts`](../examples/client/two-agents.ts)             | Two agents, one team: a sibling denied by its own cap, then the survivor denied by the team above it        |
@@ -1418,6 +1570,7 @@ Stigg account.
 | `example-gateway-litellm`   | [`gateway/litellm.ts`](../examples/gateway/litellm.ts)                 | The same two topologies when the cost is in a header: real spend, then tokens, from one request             |
 | `example-gateway-bedrock`   | [`gateway/bedrock.ts`](../examples/gateway/bedrock.ts)                 | A gateway that states no price: tokens are all there is to meter, and nothing proxies it                    |
 | `example-gateway-databricks` | [`gateway/databricks.ts`](../examples/gateway/databricks.ts)          | Databricks' **own** client, `@databricks/sdk-modelservingquery` — one method, `client.query(…)`, governed by the same recipe as the row above and reported as `databricks.query`. Shows the camelCase counters renamed back to the wire's, and a budget draining until it refuses |
+| `example-gateway-agentgateway` | [`gateway/agentgateway.ts`](../examples/gateway/agentgateway.ts)     | The same gateway called with **plain `fetch`**, no SDK: `stigg.wrapFetch` gates and meters a buffered reply, a streamed one, and the Anthropic wire — and reports the same event names the SDK route does |
 | `example-gateway-cloudflare` | [`gateway/cloudflare.ts`](../examples/gateway/cloudflare.ts)           | Cloudflare's own client (`ai.run`). The one example that does not stream — a streamed `ai.run` hands back raw SSE bytes, so there is no usage block to meter |
 | `example-setup`             | [`shared/setup-governance.ts`](../examples/shared/setup-governance.ts) | Seeds a customer, a pool and per-entity budgets. Idempotent                                                 |
 
@@ -1647,9 +1800,10 @@ testing/      mock-stigg-server.ts                    the Stigg stand-in the exa
 examples/
   shared/     demo-env, the two mocks, setup-governance    scaffolding every example uses
   client/     core/{chat,vendor} + anthropic|openai|gemini|groq|mistral|ollama|typesafe   a helper per vendor
-              databricks|litellm|openrouter                 gateways reached as a client
+              databricks|litellm|openrouter|agentgateway|solo  gateways reached as a client
               two-agents                                   two siblings, one team budget between them
   gateway/    core/{gateway,vendor,proxy} + openrouter|litellm|bedrock|cloudflare|databricks  calling one; operating one on a real socket
+              agentgateway                                 calling one with plain fetch, no SDK
 ```
 
 The examples mirror the bindings directory deliberately — a generic core plus a thin per-vendor

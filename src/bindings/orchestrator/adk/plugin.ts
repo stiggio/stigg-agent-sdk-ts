@@ -204,7 +204,12 @@ export class StiggAdkPlugin extends BasePlugin {
     const runId = `adk:${invocationId}:${++this.seq}`;
     const step = { agent: agentName, adkContext: callbackContext, model: llmRequest.model };
     try {
-      await this.middleware.startModel(runId, await this.attributionOf(step), 'adk.model');
+      // The invocation is the AUDR run: every model call of one `runAsync`, whichever agent made it.
+      const attribution = {
+        ...(await this.attributionOf(step)),
+        audr: { model: llmRequest.model, runId: invocationId },
+      };
+      await this.middleware.startModel(runId, attribution, 'adk.model');
     } catch (err) {
       const decision = isAccessDenied(err);
       if (!decision) throw err;

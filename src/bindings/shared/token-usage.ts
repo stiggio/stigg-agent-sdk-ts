@@ -453,6 +453,19 @@ export const CLOUDFLARE_METRICS = [
 ] as const;
 
 /**
+ * agentgateway, which answers on the OpenAI routes and on Anthropic Messages - each in its
+ * own wire's vocabulary, so the union of the two, like Cloudflare's.
+ *
+ * No `cost`: the gateway is self-hosted and states no price on any response.
+ * Whatever the upstream charged is invoiced by the upstream, out of band.
+ */
+export const AGENTGATEWAY_METRICS = [
+  ...OPENAI_METRICS,
+  'cache_read_input_tokens',
+  'cache_creation_input_tokens',
+] as const;
+
+/**
  * Bedrock's five, under its own names and with no price among them.
  *
  * Reported verbatim rather than translated into the OpenAI spelling, which is the rule everywhere

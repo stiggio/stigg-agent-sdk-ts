@@ -9,6 +9,28 @@ versions below track what this repository holds rather than what npm publishes.
 
 ### Added
 
+- agentgateway, the open-source AI gateway, and the builds on it (Solo Enterprise for agentgateway,
+  Gloo AI Gateway): `agentgatewayRecipe()`, over both of its wires - an OpenAI client pointed at the
+  gateway reports `agentgateway.chat.completions.create` or `agentgateway.responses.create`, an
+  Anthropic client `agentgateway.messages.create` - with the model that served as a dimension. The
+  gateway states no price, so it reports tokens. Name it with `agentgatewayRecipe({ baseUrl })`;
+  without one it is recognised only by a hostname label that is, or starts with, `agentgateway-`,
+  so Solo's and Gloo's builds need the base URL.
+- `stigg.wrapFetch({ baseUrl, recipe })`, for a gateway called with plain HTTP rather than an SDK:
+  it hands back a `fetch` that checks and reports each request a recipe declares, matched by its
+  path (`/chat/completions`, `/responses`, `/messages`), with the same event names a wrapped client
+  reports. A streamed reply is reported as the caller reads it; anything else passes through.
+- AUDR records: pass `audr: { client, environment }` at construction and the SDK also writes an
+  [AUDR](https://openaudr.dev/spec/v1.1.0/) record for every model call it measures, to your own
+  `@openaudr/audr` client. Off by default; `@openaudr/audr` is an optional peer dependency, at
+  `>=0.2.0 <0.3`.
+- Metering-only agents: `register()` with a `budget` that names no `limit` creates an unlimited
+  assignment (cadence `P1M` unless one is passed) when the agent has none, so its usage shows in
+  the tree without capping it. An existing assignment, a cap set in the dashboard included, is left
+  as it is.
+- Runnable examples, offline with no keys: `yarn example-client-agentgateway` (an OpenAI client),
+  `yarn example-client-solo` (an Anthropic client, against Solo Enterprise), and
+  `yarn example-gateway-agentgateway` (plain `fetch` through `stigg.wrapFetch`).
 - Orchestrator governance for the Vercel AI SDK (`ai` 6 and 7): `stiggVercelMiddleware()`, a
   language model middleware for the AI SDK's own `wrapLanguageModel`. Each model call of
   `generateText`, `streamText` or an agent's loop is checked before it runs and reported after, as

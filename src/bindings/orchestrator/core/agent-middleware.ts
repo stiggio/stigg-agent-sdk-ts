@@ -25,6 +25,7 @@ import {
 } from '../../../core/context';
 import { safely } from '../../../core/hooks';
 import type { GovernanceSession } from '../../../core/session';
+import type { AudrTrace } from '../../../core/audr';
 import {
   entitlementError,
   type Entitlement,
@@ -45,6 +46,12 @@ export type StepAttribution = {
    * applies a call's: the customer, dimensions, and anything else a call can override.
    */
   stiggContexts?: readonly StiggContext[];
+  /**
+   * What a model step called and where it sits in the framework's run tree, for its AUDR record.
+   * Optional: without it a record still goes out. Kept, not copied, until the step ends - so a
+   * binding can set `model` to the one the reply says served, which the start cannot know.
+   */
+  audr?: Pick<AudrTrace, 'provider' | 'model' | 'runId' | 'spanId' | 'parentSpanId'>;
 };
 
 /** A tool call the model issued in its reply: the id the tool step will refer back to, and what it named. */
@@ -386,8 +393,13 @@ export function createAgentMiddleware(session: GovernanceSession, config: AgentM
   return {
     async startModel(runId, attribution, eventName) {
       const resolved = contextFor(agentFor(attribution.agent).context, attribution);
-      const context = resolved.eventName ? resolved : { ...resolved, eventName: { name: eventName } };
+      const named = resolved.eventName ? resolved : { ...resolved, eventName: { name: eventName } };
+      // The framework's run id is this step's span, so a record lines up with the trace it is in.
+      const audr: AudrTrace = Object.assign(attribution.audr ?? {}, { spanId: attribution.audr?.spanId ?? runId });
+      const context = { ...named, audr };
       await check(context);
+      // Started once the check is through, as `wrap` times a call: the record times the model, not Stigg.
+      audr.startedAt = Date.now();
       rememberStep(runId, { context });
     },
 

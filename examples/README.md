@@ -4,7 +4,7 @@ What each one *demonstrates*, and how to run it, is [section 6 of the package
 README](../docs/guide.md#6-run-the-examples). This file answers the question that one does not:
 standing in this folder, which of these files is a thing you run?
 
-Twenty-three are. Everything else is imported by them.
+Twenty-six are. Everything else is imported by them.
 
 ## Runnable
 
@@ -18,6 +18,8 @@ Twenty-three are. Everything else is imported by them.
 | `client/ollama.ts` | `example-client-ollama` — self-hosted, so a **host** rather than a key |
 | `client/openrouter.ts` | `example-client-openrouter` — the OpenAI SDK pointed at the gateway |
 | `client/litellm.ts` | `example-client-litellm` |
+| `client/agentgateway.ts` | `example-client-agentgateway` — the OpenAI SDK pointed at a self-hosted agentgateway; its **base URL** rather than a key selects the real one |
+| `client/solo.ts` | `example-client-solo` — Solo Enterprise for agentgateway, through the **Anthropic** SDK: same recipe, same `agentgateway.*` events, the gateway's other wire |
 | `client/databricks.ts` | `example-client-databricks` — the OpenAI SDK pointed at a workspace `/serving-endpoints`. `AGENT_SDK_DATABRICKS_EXTERNAL=1` asserts the external-model route |
 | `client/typesafe.ts` | `example-client-typesafe` — **needs a real TypeSafe key**, see below |
 | `client/two-agents.ts` | `example-two-agents` — scripted, so it ends by itself |
@@ -31,6 +33,7 @@ Twenty-three are. Everything else is imported by them.
 | `gateway/litellm.ts` | `example-gateway-litellm` |
 | `gateway/bedrock.ts` | `example-gateway-bedrock` — the gateway that states no price, so it meters tokens |
 | `gateway/databricks.ts` | `example-gateway-databricks` — Databricks' **own** client, `@databricks/sdk-modelservingquery`, whose whole surface is `client.query(…)`. Same recipe as the row above, different wire. `AGENT_SDK_DATABRICKS_EXTERNAL=1` runs it against the external-model recipe |
+| `gateway/agentgateway.ts` | `example-gateway-agentgateway` — the same gateway with **no SDK at all**: plain `fetch`, governed by `stigg.wrapFetch`, buffered and streamed, on both wires |
 | `gateway/cloudflare.ts` | `example-gateway-cloudflare` — Cloudflare's own client, and the one example that does not stream: a streamed `ai.run` carries no usage to read |
 | `shared/setup-governance.ts` | `example-setup` — also imported by every example above |
 
@@ -40,13 +43,13 @@ All of them work with no keys and no Stigg account **except `example-client-type
 built-in vendor mock speaks the chat wire formats, and TypeSafe's System One is not one of them.
 Stigg still falls back to its own mock there, so only the vendor key is required.
 
-The nine chat examples — `anthropic`, `openai`, `gemini`, `groq`, `mistral`, `ollama`,
-`openrouter`, `litellm` and `databricks` — share one REPL and stay open until you end them, as do
-the orchestrator examples, which are chats with a graph of agents rather than with a model. The
-rest run a fixed script and exit: `typesafe`, which asks a whole set of typed questions in one call
-rather than holding a conversation, `two-agents`, `cloudflare`, and the gateway examples. The
-test suite runs three of those — the OpenRouter and LiteLLM gateways, and `two-agents` — and
-every orchestrator example as well, with its input piped in.
+The eleven chat examples — `anthropic`, `openai`, `gemini`, `groq`, `mistral`, `ollama`,
+`openrouter`, `litellm`, `agentgateway`, `solo` and `databricks` — share one REPL and stay open
+until you end them, as do the orchestrator examples, which are chats with a graph of agents rather
+than with a model. The rest run a fixed script and exit: `typesafe`, which asks a whole set of typed
+questions in one call rather than holding a conversation, `two-agents`, `cloudflare`, and the
+gateway examples. The test suite runs four of those — the OpenRouter, LiteLLM and agentgateway
+gateways, and `two-agents` — and every orchestrator example as well, with its input piped in.
 
 ## Imported, not runnable
 

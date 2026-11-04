@@ -1,6 +1,6 @@
 {
   "name": "@stigg/agent-sdk-js",
-  "version": "0.7.4",
+  "version": "0.7.7",
   "private": true,
   "description": "Stigg agent SDK (JS) - run-lifecycle governance for agentic stacks, with examples per layer",
   "license": "MIT",
@@ -33,12 +33,15 @@
     "example-client-ollama": "tsx examples/client/ollama.ts",
     "example-client-openrouter": "tsx examples/client/openrouter.ts",
     "example-client-litellm": "tsx examples/client/litellm.ts",
+    "example-client-agentgateway": "tsx examples/client/agentgateway.ts",
+    "example-client-solo": "tsx examples/client/solo.ts",
     "example-client-databricks": "tsx examples/client/databricks.ts",
     "example-client-typesafe": "tsx examples/client/typesafe.ts",
     "example-two-agents": "tsx examples/client/two-agents.ts",
     "example-gateway": "tsx examples/gateway/openrouter.ts",
     "example-gateway-openrouter": "tsx examples/gateway/openrouter.ts",
     "example-gateway-litellm": "tsx examples/gateway/litellm.ts",
+    "example-gateway-agentgateway": "tsx examples/gateway/agentgateway.ts",
     "example-gateway-cloudflare": "tsx examples/gateway/cloudflare.ts",
     "example-gateway-bedrock": "tsx examples/gateway/bedrock.ts",
     "example-gateway-databricks": "tsx examples/gateway/databricks.ts",
@@ -57,6 +60,7 @@
   "peerDependencies": {
     "@google/adk": ">=2.3.0 <3",
     "@langchain/core": ">=1.0.0 <2",
+    "@openaudr/audr": ">=0.2.0 <0.3",
     "@opentelemetry/api": "^1.9.0"
   },
   "peerDependenciesMeta": {
@@ -64,6 +68,9 @@
       "optional": true
     },
     "@langchain/core": {
+      "optional": true
+    },
+    "@openaudr/audr": {
       "optional": true
     },
     "@opentelemetry/api": {
@@ -86,6 +93,7 @@
     "@langfuse/otel": "^6.0.0",
     "@langfuse/tracing": "^6.0.0",
     "@mistralai/mistralai": "^2.7.0",
+    "@openaudr/audr": "0.2.0",
     "@openrouter/sdk": "^1.4.25",
     "@opentelemetry/api": "^1.9.0",
     "@opentelemetry/core": "^2.12.0",

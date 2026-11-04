@@ -455,6 +455,34 @@ describe('register forwards the whole agent, not a hand-copied subset', () => {
     assert.deepEqual(mock.state.entityWrites, [], 'and nothing is created half-configured');
   });
 
+  it('meters an agent whose budget names no limit: an unlimited assignment, seeded once', async () => {
+    const { stigg, mock } = await newStigg();
+    const register = () =>
+      stigg.register({
+        entityTypeId: 'agent',
+        customerId: context.customerId,
+        agentId: 'agent-1',
+        budget: { entitlement: context.entitlement },
+      });
+
+    await register();
+    // The mock fills an omitted limit and window in on create, so what it stored cannot tell a
+    // seed from a bare placement. The read can: only a seed asks whether an assignment exists.
+    assert.equal(mock.state.assignmentPages.length, 1, 'a seed reads before it writes');
+    assert.equal(mock.state.assignmentWrites[0]?.usageLimit, null);
+    assert.equal(mock.state.assignmentWrites[0]?.cadence, 'P1M');
+
+    // An admin caps it; the next process start must not lift the cap again.
+    await stigg.register({
+      entityTypeId: 'agent',
+      customerId: context.customerId,
+      agentId: 'agent-1',
+      budget: { entitlement: context.entitlement, limit: 5 },
+    });
+    await register();
+    assert.equal(mock.state.assignmentWrites.at(-1)?.usageLimit, 5);
+  });
+
   it('writes no assignment when the call names no budget at all', async () => {
     // A budget with no entitlement is not expressible, so "no budget" is the absence of the
     // field rather than an empty one.

@@ -29,6 +29,9 @@ export type RestGovernanceEngineOptions = {
   timeoutMs?: number;
 };
 
+/** The window an unlimited assignment is created with when the caller named none. */
+const TRACKING_CADENCE = 'P1M';
+
 /** The governance check endpoint is `/api/v1-beta/` and flagged experimental. */
 export class RestGovernanceEngine implements GovernanceEngine {
   /**
@@ -137,10 +140,14 @@ export class RestGovernanceEngine implements GovernanceEngine {
     const scope = scopeOf(placement.scopeEntityIds);
     // Every page: the one with this scope can sit past the first, and missing it would overwrite
     // an admin's limit with the seed.
+    const tracking = placement.usageLimitOnCreate === null;
     for await (const row of this.client.v1Beta.customers.assignments.list(customerId, { entityId, ...capability })) {
-      // Already assigned: leave the limit and its window exactly as they are.
-      if (scopeOf(row.scopeEntityIds) === scope) return {};
+      // Already assigned: leave the limit and its window exactly as they are - except that a
+      // metering-only call still moves the window it named, as a budget with no limit always did.
+      if (scopeOf(row.scopeEntityIds) === scope) return tracking ? cadence : {};
     }
+    // Governance requires a window on create, and a metering-only caller has no reason to pick one.
+    if (tracking) return { usageLimit: null, cadence: placement.cadence ?? TRACKING_CADENCE };
     return { usageLimit: placement.usageLimitOnCreate, ...cadence };
   }
 

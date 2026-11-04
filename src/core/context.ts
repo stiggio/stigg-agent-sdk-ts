@@ -24,6 +24,7 @@
 import { entitlementError, entitlementId, vendorMetrics } from '../types';
 import type { CheckErrorAction, Entitlement, IngestMode, Metrics, MetricsMapper } from '../types';
 import type { EventIngest } from '../engine/engine';
+import type { AudrTrace } from './audr';
 
 /**
  * What a call is governed by. Every field is optional here because each one may have been given
@@ -142,6 +143,12 @@ export type ResolvedContext = {
   usageMapper: MetricsMapper;
   idempotencyKey?: string;
   correlationId: string;
+  /**
+   * Whether a context stated `correlationId`, rather than taking the one its wrap generated. Only
+   * a stated id says which calls belong to one run; a generated one spans every call - and every
+   * customer - through the client.
+   */
+  correlationStated?: true;
   /** The entitlement's own id, resolved once - undefined when this context gates on nothing. */
   checkedId?: string;
   /**
@@ -161,6 +168,11 @@ export type ResolvedContext = {
   agent?: string;
   /** The paid tool this step ran, when a middleware checked one - a label, like `agent`. */
   tool?: string;
+  /**
+   * What the binding knows about the call for its AUDR record - provider, model, span. Set per
+   * call, read only when AUDR emission is on, and never sent to Stigg.
+   */
+  audr?: AudrTrace;
 };
 
 /**
@@ -283,6 +295,7 @@ export function resolveContext(
     usageMapper: context.usageMapper ?? vendorMetrics,
     idempotencyKey: context.idempotencyKey,
     correlationId: context.correlationId?.trim() || correlationId,
+    ...(context.correlationId?.trim() ? { correlationStated: true as const } : {}),
     checkedId: context.entitlement ? entitlementId(context.entitlement) : undefined,
     attributionKey: context.attributionKey,
   };
@@ -449,6 +462,7 @@ export function overrideContext(base: ResolvedContext, override: StiggContext): 
     usageMapper: override.usageMapper ?? base.usageMapper,
     idempotencyKey: override.idempotencyKey ?? base.idempotencyKey,
     correlationId: override.correlationId?.trim() || base.correlationId,
+    ...(override.correlationId?.trim() || base.correlationStated ? { correlationStated: true as const } : {}),
     attributionKey: override.attributionKey ?? base.attributionKey,
   };
 }

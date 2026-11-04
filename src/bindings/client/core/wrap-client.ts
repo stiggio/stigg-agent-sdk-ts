@@ -46,7 +46,7 @@ export function wrapClient<T extends object>(
   const copy = Object.create(client) as T;
   let patched = 0;
   for (const method of recipe.methods) {
-    if (patch(copy, client, session, context, method, eventNameFor(recipe, method))) patched += 1;
+    if (patch(copy, client, session, context, method, eventNameFor(recipe, method), recipe.vendor)) patched += 1;
   }
 
   // A recipe whose paths resolve to nothing produces a client that is stamped, looks governed,
@@ -107,6 +107,7 @@ function patch(
   base: ResolvedContext,
   method: MethodRecipe,
   eventName: string,
+  vendor: string,
 ): boolean {
   const resolved = ownPath(copy, source, method.path.slice(0, -1));
   if (!resolved) return false;
@@ -177,13 +178,20 @@ function patch(
         if (!decision.hasAccess) throw new AccessDeniedError(decision);
       }
 
+      const startedAt = Date.now();
       const result = await collect(original.apply(target, args), params);
 
       // Whatever the recipe reports - tokens for most vendors, real spend plus the model that
       // served it for one that knows better. The wrapper stays out of that judgement.
       const ingest = (measured: TokenUsage | Measurement) => {
         const measurement = toMeasurement(measured);
-        void session.ingestMeasurement(context, measurement);
+        // What an AUDR record names and the measurement does not. Read when the usage arrives, so
+        // a stream's ingest finds the same answer a completed response does.
+        const traced: ResolvedContext = {
+          ...context,
+          audr: { provider: vendor, model: modelOf(result.data, params, args[0]), startedAt },
+        };
+        void session.ingestMeasurement(traced, measurement);
         // Reported what it could, and said what it could not. A measurement that does not cover
         // everything the vendor charged for is a metering failure even though the ingest itself
         // succeeded - so it goes out *and* is raised, rather than one or the other.
@@ -211,6 +219,24 @@ function patch(
 }
 
 /**
+ * The model a call used, for its AUDR record: the response's word for it before the request's,
+ * since a router can serve another. Read by shape across vendors - `model` for most,
+ * `modelVersion` on a Gemini response, `input.modelId` on a Bedrock command, and a bare string
+ * for Cloudflare's `ai.run(model, inputs)`.
+ */
+export function modelOf(...sources: unknown[]): string | undefined {
+  for (const source of sources) {
+    if (typeof source === 'string' && source) return source;
+    if (typeof source !== 'object' || source === null) continue;
+    const fields = source as Record<string, any>;
+    for (const value of [fields.model, fields.modelVersion, fields.modelId, fields.input?.modelId]) {
+      if (typeof value === 'string' && value) return value;
+    }
+  }
+  return undefined;
+}
+
+/**
  * How much to ask permission for, with the one answer a gate must never send.
  *
  * `estimate` is the application's own callback - a gateway recipe takes it as an option - and a
@@ -219,7 +245,7 @@ function patch(
  * the same comparison in the other direction. Zero and fractions are left alone: a credit
  * currency is spent in fractions, and asking for nothing is a legitimate "may I at all".
  */
-function requestedUnits(estimate: (params: any) => number, params: any): number {
+export function requestedUnits(estimate: (params: any) => number, params: any): number {
   const units = estimate(params);
   return Number.isFinite(units) && units >= 0 ? units : 1;
 }

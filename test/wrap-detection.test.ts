@@ -17,6 +17,7 @@ import { anthropicRecipe } from '../src/bindings/client/providers/anthropic/anth
 import { openAIRecipe } from '../src/bindings/client/providers/openai/openai-recipe';
 import { openrouterRecipe } from '../src/bindings/client/gateways/openrouter/openrouter-recipe';
 import { litellmRecipe } from '../src/bindings/client/gateways/litellm/litellm-recipe';
+import { agentgatewayRecipe } from '../src/bindings/client/gateways/agentgateway/agentgateway-recipe';
 import { isGovernanceNotEnabled } from '../src/errors';
 import {
   fundPool,
@@ -700,6 +701,7 @@ describe('the built-in adapters cover every vendor the examples use', () => {
       ['anthropic', anthropicShaped(), 'messages.create'],
       ['openrouter', openAIShapedAt('https://openrouter.ai/api/v1'), 'openrouter base url'],
       ['litellm', openAIShapedAt('https://litellm.internal/v1'), 'litellm base url'],
+      ['agentgateway', openAIShapedAt('http://agentgateway.agentgateway-system.svc:8080/v1'), 'agentgateway service'],
       ['openai', openAIShapedAt('https://api.openai.com/v1'), 'plain openai'],
     ];
 
@@ -758,6 +760,18 @@ describe('a gateway recipe claims its own endpoint and no other', () => {
     // LiteLLM is the asymmetry that hid it: with no configured base URL it falls back to a
     // substring test, so its own mock path does match.
     assert.equal(litellmRecipe().matches?.(at('http://127.0.0.1:5311/litellm/v1')), true);
+  });
+
+  it('claims agentgateway by a whole hostname label, never by a substring', () => {
+    assert.equal(agentgatewayRecipe().matches?.(at('http://agentgateway.agentgateway-system.svc:8080/v1')), true);
+    // Solo's and Gloo's names are not guessed on: they are named by base URL.
+    assert.equal(agentgatewayRecipe().matches?.(at('http://ai-gateway.gloo-system.svc.cluster.local/v1')), false);
+    // Labels, not substrings.
+    assert.equal(agentgatewayRecipe().matches?.(at('https://myagentgateway.example.com/v1')), false);
+    assert.equal(agentgatewayRecipe().matches?.(at('https://api.openai.com/v1')), false);
+    // Like OpenRouter, and unlike LiteLLM, a mock that names the gateway only in its path is not
+    // claimed - so the example names the recipe with its base URL.
+    assert.equal(agentgatewayRecipe().matches?.(at('http://127.0.0.1:5311/agentgateway/v1')), false);
   });
 
   it('does not let a neighbouring path claim a configured LiteLLM proxy', () => {
